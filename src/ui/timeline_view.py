@@ -141,7 +141,7 @@ class TimelineView:
         header.pack(fill=tk.X, pady=(0, 10))
 
         # Previous day button
-        prev_btn = ttk.Button(header, text="< Previous", command=self._prev_day)
+        prev_btn = ttk.Button(header, text="◀ Previous", command=self._prev_day)
         prev_btn.pack(side=tk.LEFT)
 
         # Date label
@@ -153,11 +153,11 @@ class TimelineView:
         self._date_label.pack(side=tk.LEFT, expand=True)
 
         # Next day button
-        next_btn = ttk.Button(header, text="Next >", command=self._next_day)
+        next_btn = ttk.Button(header, text="Next ▶", command=self._next_day)
         next_btn.pack(side=tk.RIGHT)
 
         # Today button
-        today_btn = ttk.Button(header, text="Today", command=self._go_today)
+        today_btn = ttk.Button(header, text="📅 Today", command=self._go_today)
         today_btn.pack(side=tk.RIGHT, padx=5)
 
     def _create_timeline_canvas(self, parent):
@@ -254,7 +254,7 @@ class TimelineView:
         filter_entry = ttk.Entry(search_frame, textvariable=self._filter_var, width=30)
         filter_entry.pack(side=tk.LEFT, padx=(5, 10))
 
-        ttk.Button(search_frame, text="Clear", command=self._clear_filter, width=6).pack(side=tk.LEFT)
+        ttk.Button(search_frame, text="✕ Clear", command=self._clear_filter, width=8).pack(side=tk.LEFT)
 
         self._filter_count_label = ttk.Label(search_frame, text="", foreground='#666')
         self._filter_count_label.pack(side=tk.RIGHT, padx=5)

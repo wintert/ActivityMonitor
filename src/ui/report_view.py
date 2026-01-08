@@ -147,7 +147,7 @@ class ReportView:
         nav_frame = ttk.Frame(header)
         nav_frame.pack(side=tk.RIGHT)
 
-        ttk.Button(nav_frame, text="<", command=self._prev_period, width=3).pack(side=tk.LEFT)
+        ttk.Button(nav_frame, text="◀", command=self._prev_period, width=3).pack(side=tk.LEFT)
 
         self._date_label = ttk.Label(
             nav_frame,
@@ -158,8 +158,8 @@ class ReportView:
         )
         self._date_label.pack(side=tk.LEFT, padx=10)
 
-        ttk.Button(nav_frame, text=">", command=self._next_period, width=3).pack(side=tk.LEFT)
-        ttk.Button(nav_frame, text="Today", command=self._go_today).pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Button(nav_frame, text="▶", command=self._next_period, width=3).pack(side=tk.LEFT)
+        ttk.Button(nav_frame, text="📅 Today", command=self._go_today).pack(side=tk.LEFT, padx=(10, 0))
 
     def _create_report_area(self, parent):
         """Create the main report display area with tabs for table and charts."""
@@ -295,19 +295,19 @@ class ReportView:
 
         ttk.Button(
             export_frame,
-            text="Export Summary to CSV",
+            text="📊 Export Summary",
             command=self._export_summary
         ).pack(side=tk.LEFT, padx=(0, 10))
 
         ttk.Button(
             export_frame,
-            text="Export Detailed Timeline to CSV",
+            text="📋 Export Timeline",
             command=self._export_timeline
         ).pack(side=tk.LEFT)
 
         ttk.Button(
             export_frame,
-            text="Copy to Clipboard",
+            text="📄 Copy to Clipboard",
             command=self._copy_to_clipboard
         ).pack(side=tk.RIGHT)
 
