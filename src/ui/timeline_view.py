@@ -52,6 +52,8 @@ class TimelineView:
         self._color_map: Dict[str, str] = {}
         self._color_index = 0
         self._selected_date = datetime.now()
+        self._tooltip = None
+        self._segment_data: Dict[int, Dict] = {}  # Maps canvas item id to segment data
 
     def _get_project_color(self, project_name: str) -> str:
         """Get a consistent color for a project."""
@@ -175,14 +177,94 @@ class TimelineView:
         # Bind resize event
         self._timeline_canvas.bind('<Configure>', lambda e: self._draw_timeline())
 
+        # Bind tooltip events
+        self._timeline_canvas.bind('<Motion>', self._on_canvas_motion)
+        self._timeline_canvas.bind('<Leave>', self._hide_tooltip)
+
+    def _on_canvas_motion(self, event):
+        """Handle mouse motion over the timeline canvas."""
+        # Find item under cursor
+        items = self._timeline_canvas.find_overlapping(event.x - 1, event.y - 1, event.x + 1, event.y + 1)
+
+        # Look for a segment
+        for item_id in items:
+            if item_id in self._segment_data:
+                segment = self._segment_data[item_id]
+                self._show_tooltip(event, segment)
+                return
+
+        self._hide_tooltip()
+
+    def _show_tooltip(self, event, segment: Dict):
+        """Show tooltip with segment information."""
+        if self._tooltip is None:
+            self._tooltip = tk.Toplevel(self.window)
+            self._tooltip.wm_overrideredirect(True)
+            self._tooltip.wm_attributes('-topmost', True)
+            self._tooltip_label = tk.Label(
+                self._tooltip,
+                justify=tk.LEFT,
+                background='#2b3e50',
+                foreground='white',
+                font=('Segoe UI', 9),
+                padx=8,
+                pady=4
+            )
+            self._tooltip_label.pack()
+
+        # Format tooltip text
+        project = segment.get('project', 'Unknown')
+        start = segment.get('start')
+        end = segment.get('end')
+        duration_secs = (end - start).total_seconds() if start and end else 0
+        duration_mins = int(duration_secs / 60)
+        status = "Active" if segment.get('is_active') else "Idle"
+
+        if duration_mins >= 60:
+            duration_str = f"{duration_mins // 60}h {duration_mins % 60}m"
+        else:
+            duration_str = f"{duration_mins}m"
+
+        text = f"{project}\n{start.strftime('%H:%M')} - {end.strftime('%H:%M')}\nDuration: {duration_str}\nStatus: {status}"
+        self._tooltip_label.config(text=text)
+
+        # Position tooltip near cursor
+        x = self.window.winfo_rootx() + event.x + 15
+        y = self.window.winfo_rooty() + event.y + 100  # Offset for header
+        self._tooltip.wm_geometry(f"+{x}+{y}")
+        self._tooltip.deiconify()
+
+    def _hide_tooltip(self, event=None):
+        """Hide the tooltip."""
+        if self._tooltip:
+            self._tooltip.withdraw()
+
     def _create_activity_list(self, parent):
-        """Create the scrollable activity list."""
+        """Create the scrollable activity list with search filter."""
         list_frame = ttk.LabelFrame(parent, text="Activities")
         list_frame.pack(fill=tk.BOTH, expand=True)
 
+        # Search/filter box
+        search_frame = ttk.Frame(list_frame)
+        search_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
+
+        ttk.Label(search_frame, text="Filter:").pack(side=tk.LEFT)
+        self._filter_var = tk.StringVar()
+        self._filter_var.trace('w', lambda *args: self._apply_filter())
+        filter_entry = ttk.Entry(search_frame, textvariable=self._filter_var, width=30)
+        filter_entry.pack(side=tk.LEFT, padx=(5, 10))
+
+        ttk.Button(search_frame, text="Clear", command=self._clear_filter, width=6).pack(side=tk.LEFT)
+
+        self._filter_count_label = ttk.Label(search_frame, text="", foreground='#666')
+        self._filter_count_label.pack(side=tk.RIGHT, padx=5)
+
         # Create treeview with scrollbar
+        tree_frame = ttk.Frame(list_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+
         columns = ('time', 'duration', 'project', 'window')
-        self._activity_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=10)
+        self._activity_tree = ttk.Treeview(tree_frame, columns=columns, show='headings', height=10)
 
         self._activity_tree.heading('time', text='Time')
         self._activity_tree.heading('duration', text='Duration')
@@ -194,11 +276,23 @@ class TimelineView:
         self._activity_tree.column('project', width=150, minwidth=100)
         self._activity_tree.column('window', width=400, minwidth=200)
 
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self._activity_tree.yview)
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self._activity_tree.yview)
         self._activity_tree.configure(yscrollcommand=scrollbar.set)
 
         self._activity_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Store activities for filtering
+        self._current_activities: List[Dict] = []
+
+    def _clear_filter(self):
+        """Clear the filter entry."""
+        self._filter_var.set("")
+
+    def _apply_filter(self):
+        """Apply filter to activity list."""
+        filter_text = self._filter_var.get().lower().strip()
+        self._update_activity_list(self._current_activities, filter_text)
 
     def _create_summary_panel(self, parent):
         """Create the summary panel."""
@@ -240,6 +334,7 @@ class TimelineView:
         """Draw the timeline visualization."""
         canvas = self._timeline_canvas
         canvas.delete('all')
+        self._segment_data.clear()  # Clear tooltip data
 
         width = canvas.winfo_width()
         height = canvas.winfo_height()
@@ -300,12 +395,14 @@ class TimelineView:
             else:
                 color = '#CCCCCC'  # Gray for idle
 
-            canvas.create_rectangle(
+            item_id = canvas.create_rectangle(
                 x1, bar_top + 2,
                 x2, bar_top + bar_height - 2,
                 fill=color, outline='',
                 tags=('segment',)
             )
+            # Store segment data for tooltip
+            self._segment_data[item_id] = segment
 
     def _group_activities_into_segments(self, activities: List[Dict]) -> List[Dict]:
         """Group consecutive activities with same project into segments."""
@@ -346,26 +443,49 @@ class TimelineView:
 
         return segments
 
-    def _update_activity_list(self, activities: List[Dict]):
-        """Update the activity list treeview."""
+    def _update_activity_list(self, activities: List[Dict], filter_text: str = ""):
+        """Update the activity list treeview with optional filtering."""
+        # Store activities for filtering
+        if activities:
+            self._current_activities = activities
+
         # Clear existing items
         for item in self._activity_tree.get_children():
             self._activity_tree.delete(item)
 
         # Group activities to reduce noise
-        grouped = self._group_activities_for_list(activities)
+        grouped = self._group_activities_for_list(self._current_activities)
+
+        # Apply filter
+        displayed_count = 0
+        total_count = len(grouped)
 
         for activity in grouped:
+            project = activity['project'] or 'Uncategorized'
+            window = activity['window_title']
+
+            # Filter check
+            if filter_text:
+                if filter_text not in project.lower() and filter_text not in window.lower():
+                    continue
+
+            displayed_count += 1
+
             time_str = activity['start_time'].strftime('%H:%M')
             duration_str = self._format_duration(activity['duration'])
-            project = activity['project'] or 'Uncategorized'
-            window = activity['window_title'][:80] + '...' if len(activity['window_title']) > 80 else activity['window_title']
+            window_display = window[:80] + '...' if len(window) > 80 else window
 
             # Add IDLE indicator to project name
             if not activity['is_active']:
                 project = f"[IDLE] {project}"
 
-            self._activity_tree.insert('', tk.END, values=(time_str, duration_str, project, window))
+            self._activity_tree.insert('', tk.END, values=(time_str, duration_str, project, window_display))
+
+        # Update filter count label
+        if filter_text:
+            self._filter_count_label.config(text=f"Showing {displayed_count} of {total_count}")
+        else:
+            self._filter_count_label.config(text=f"{total_count} activities")
 
     def _group_activities_for_list(self, activities: List[Dict]) -> List[Dict]:
         """Group activities for display in list (merge consecutive same-project activities)."""

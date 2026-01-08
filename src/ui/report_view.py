@@ -22,6 +22,16 @@ except ImportError:
     Messagebox = None
     TTKBOOTSTRAP_AVAILABLE = False
 
+# Matplotlib for charts
+try:
+    import matplotlib
+    matplotlib.use('TkAgg')
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -152,12 +162,9 @@ class ReportView:
         ttk.Button(nav_frame, text="Today", command=self._go_today).pack(side=tk.LEFT, padx=(10, 0))
 
     def _create_report_area(self, parent):
-        """Create the main report display area."""
-        report_frame = ttk.LabelFrame(parent, text="Report")
-        report_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10), padx=5)
-
+        """Create the main report display area with tabs for table and charts."""
         # Summary stats at top
-        stats_frame = ttk.Frame(report_frame)
+        stats_frame = ttk.Frame(parent)
         stats_frame.pack(fill=tk.X, pady=(0, 10))
 
         self._total_label = ttk.Label(
@@ -175,10 +182,26 @@ class ReportView:
         )
         self._idle_label.pack(side=tk.LEFT, padx=(20, 0))
 
-        # Project breakdown table
+        # Notebook for tabs
+        self._notebook = ttk.Notebook(parent)
+        self._notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        # Tab 1: Table view
+        table_frame = ttk.Frame(self._notebook)
+        self._notebook.add(table_frame, text="Table")
+        self._create_table(table_frame)
+
+        # Tab 2: Charts view (only if matplotlib available)
+        if MATPLOTLIB_AVAILABLE:
+            charts_frame = ttk.Frame(self._notebook)
+            self._notebook.add(charts_frame, text="Charts")
+            self._create_charts(charts_frame)
+
+    def _create_table(self, parent):
+        """Create the project breakdown table."""
         columns = ('project', 'time', 'percentage')
         self._report_tree = ttk.Treeview(
-            report_frame,
+            parent,
             columns=columns,
             show='headings',
             height=12
@@ -192,11 +215,78 @@ class ReportView:
         self._report_tree.column('time', width=120, minwidth=80, anchor='center')
         self._report_tree.column('percentage', width=80, minwidth=60, anchor='center')
 
-        scrollbar = ttk.Scrollbar(report_frame, orient=tk.VERTICAL, command=self._report_tree.yview)
+        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self._report_tree.yview)
         self._report_tree.configure(yscrollcommand=scrollbar.set)
 
         self._report_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _create_charts(self, parent):
+        """Create the charts area with pie chart and bar chart."""
+        # Create figure with two subplots
+        self._fig = Figure(figsize=(8, 4), dpi=100)
+        self._fig.patch.set_facecolor('#2b3e50')  # Match dark theme
+
+        # Pie chart (left)
+        self._pie_ax = self._fig.add_subplot(121)
+        self._pie_ax.set_facecolor('#2b3e50')
+
+        # Bar chart (right)
+        self._bar_ax = self._fig.add_subplot(122)
+        self._bar_ax.set_facecolor('#2b3e50')
+
+        # Embed in tkinter
+        self._chart_canvas = FigureCanvasTkAgg(self._fig, parent)
+        self._chart_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    def _update_charts(self, data: List[Dict]):
+        """Update the charts with current data."""
+        if not MATPLOTLIB_AVAILABLE:
+            return
+
+        # Clear previous charts
+        self._pie_ax.clear()
+        self._bar_ax.clear()
+
+        if not data:
+            self._pie_ax.text(0.5, 0.5, 'No data', ha='center', va='center', color='white')
+            self._bar_ax.text(0.5, 0.5, 'No data', ha='center', va='center', color='white')
+            self._chart_canvas.draw()
+            return
+
+        # Prepare data for pie chart
+        projects = [item['project_name'] for item in data[:8]]  # Top 8 projects
+        seconds = [item.get('active_seconds', 0) for item in data[:8]]
+        colors = [self._get_project_color(p) for p in projects]
+
+        # Draw pie chart
+        if sum(seconds) > 0:
+            wedges, texts, autotexts = self._pie_ax.pie(
+                seconds,
+                labels=projects,
+                colors=colors,
+                autopct=lambda pct: f'{pct:.1f}%' if pct > 5 else '',
+                startangle=90,
+                textprops={'color': 'white', 'fontsize': 8}
+            )
+            self._pie_ax.set_title('Time Distribution', color='white', fontsize=10)
+        else:
+            self._pie_ax.text(0.5, 0.5, 'No activity', ha='center', va='center', color='white')
+
+        # Draw bar chart (hours per project)
+        if projects and sum(seconds) > 0:
+            hours = [s / 3600 for s in seconds]
+            y_pos = range(len(projects))
+            bars = self._bar_ax.barh(y_pos, hours, color=colors)
+            self._bar_ax.set_yticks(y_pos)
+            self._bar_ax.set_yticklabels(projects, fontsize=8, color='white')
+            self._bar_ax.set_xlabel('Hours', color='white', fontsize=9)
+            self._bar_ax.set_title('Hours by Project', color='white', fontsize=10)
+            self._bar_ax.tick_params(axis='x', colors='white')
+            self._bar_ax.invert_yaxis()  # Top project at top
+
+        self._fig.tight_layout()
+        self._chart_canvas.draw()
 
     def _create_export_buttons(self, parent):
         """Create export buttons."""
@@ -266,6 +356,10 @@ class ReportView:
                 '', tk.END,
                 values=(project, time_str, f"{pct:.1f}%")
             )
+
+        # Update charts
+        if MATPLOTLIB_AVAILABLE:
+            self._update_charts(data)
 
     def _get_weekly_data(self, start_date: datetime) -> List[Dict]:
         """Get aggregated weekly data."""
