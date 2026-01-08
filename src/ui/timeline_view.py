@@ -120,18 +120,18 @@ class TimelineView:
         self._create_timeline_canvas(main_frame)
 
         # Paned window for resizable activity list and summary
-        paned = ttk.PanedWindow(main_frame, orient=tk.VERTICAL)
+        paned = tk.PanedWindow(main_frame, orient=tk.VERTICAL, sashrelief=tk.RAISED)
         paned.pack(fill=tk.BOTH, expand=True)
 
         # Activity list
         activity_frame = ttk.Frame(paned)
         self._create_activity_list(activity_frame)
-        paned.add(activity_frame, weight=3)
+        paned.add(activity_frame, stretch="always", minsize=100)
 
         # Summary panel
         summary_frame = ttk.Frame(paned)
         self._create_summary_panel(summary_frame)
-        paned.add(summary_frame, weight=1)
+        paned.add(summary_frame, stretch="always", minsize=80)
 
     def _create_header(self, parent):
         """Create the header with date navigation."""
