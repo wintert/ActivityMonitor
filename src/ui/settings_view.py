@@ -6,16 +6,17 @@ Allows users to configure application settings.
 from typing import Optional, Callable
 import logging
 
+import tkinter as tk
+from tkinter import messagebox
+
 try:
     import ttkbootstrap as ttk
     from ttkbootstrap.constants import *
     from ttkbootstrap import Toplevel
     from ttkbootstrap.dialogs import Messagebox
-    import tkinter as tk
     TTKBOOTSTRAP_AVAILABLE = True
 except ImportError:
-    import tkinter as tk
-    from tkinter import ttk, messagebox
+    from tkinter import ttk
     Toplevel = tk.Toplevel
     Messagebox = None
     TTKBOOTSTRAP_AVAILABLE = False
@@ -98,8 +99,8 @@ class SettingsView:
         self.window.protocol("WM_DELETE_WINDOW", self.close)
 
         # Main container with scrollbar
-        main_frame = ttk.Frame(self.window, padding="15")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame = ttk.Frame(self.window)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
 
         # Create sections
         self._create_idle_section(main_frame)
@@ -115,7 +116,7 @@ class SettingsView:
 
     def _create_idle_section(self, parent):
         """Create idle detection settings section."""
-        frame = ttk.LabelFrame(parent, text="Idle Detection", padding="10")
+        frame = ttk.LabelFrame(parent, text="Idle Detection")
         frame.pack(fill=tk.X, pady=(0, 10))
 
         # Idle timeout
@@ -143,7 +144,7 @@ class SettingsView:
 
     def _create_camera_section(self, parent):
         """Create camera presence detection settings section."""
-        frame = ttk.LabelFrame(parent, text="Camera Presence Detection", padding="10")
+        frame = ttk.LabelFrame(parent, text="Camera Presence Detection")
         frame.pack(fill=tk.X, pady=(0, 10))
 
         # Enable camera
@@ -266,7 +267,7 @@ class SettingsView:
 
     def _create_tracking_section(self, parent):
         """Create tracking settings section."""
-        frame = ttk.LabelFrame(parent, text="Activity Tracking", padding="10")
+        frame = ttk.LabelFrame(parent, text="Activity Tracking")
         frame.pack(fill=tk.X, pady=(0, 10))
 
         # Polling interval
@@ -302,7 +303,7 @@ class SettingsView:
 
     def _create_theme_section(self, parent):
         """Create theme settings section."""
-        frame = ttk.LabelFrame(parent, text="Appearance", padding="10")
+        frame = ttk.LabelFrame(parent, text="Appearance")
         frame.pack(fill=tk.X, pady=(0, 10))
 
         row = ttk.Frame(frame)
@@ -330,7 +331,7 @@ class SettingsView:
 
     def _create_break_reminder_section(self, parent):
         """Create break reminder settings section."""
-        frame = ttk.LabelFrame(parent, text="Break Reminders", padding="10")
+        frame = ttk.LabelFrame(parent, text="Break Reminders")
         frame.pack(fill=tk.X, pady=(0, 10))
 
         # Enable break reminders
@@ -366,7 +367,7 @@ class SettingsView:
 
     def _create_daily_summary_section(self, parent):
         """Create daily summary settings section."""
-        frame = ttk.LabelFrame(parent, text="Daily Summary", padding="10")
+        frame = ttk.LabelFrame(parent, text="Daily Summary")
         frame.pack(fill=tk.X, pady=(0, 10))
 
         # Enable daily summary
@@ -402,7 +403,7 @@ class SettingsView:
 
     def _create_startup_section(self, parent):
         """Create startup settings section."""
-        frame = ttk.LabelFrame(parent, text="Startup", padding="10")
+        frame = ttk.LabelFrame(parent, text="Startup")
         frame.pack(fill=tk.X, pady=(0, 10))
 
         self._vars['start_minimized'] = tk.BooleanVar()

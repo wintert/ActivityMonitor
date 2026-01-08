@@ -17,12 +17,13 @@ import re
 from datetime import datetime, timedelta
 from typing import Optional
 
+import tkinter as tk
+
 try:
     import ttkbootstrap as ttk
     from ttkbootstrap import Window as TtkWindow
     TTKBOOTSTRAP_AVAILABLE = True
 except ImportError:
-    import tkinter as tk
     from tkinter import ttk
     TtkWindow = None
     TTKBOOTSTRAP_AVAILABLE = False

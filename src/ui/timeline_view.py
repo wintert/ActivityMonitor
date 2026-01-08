@@ -7,14 +7,14 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import logging
 
+import tkinter as tk
+
 try:
     import ttkbootstrap as ttk
     from ttkbootstrap.constants import *
     from ttkbootstrap import Toplevel
-    import tkinter as tk
     TTKBOOTSTRAP_AVAILABLE = True
 except ImportError:
-    import tkinter as tk
     from tkinter import ttk
     Toplevel = tk.Toplevel
     TTKBOOTSTRAP_AVAILABLE = False
@@ -110,8 +110,8 @@ class TimelineView:
         self.window.protocol("WM_DELETE_WINDOW", self.close)
 
         # Main container
-        main_frame = ttk.Frame(self.window, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame = ttk.Frame(self.window)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Header with date navigation
         self._create_header(main_frame)
@@ -160,7 +160,7 @@ class TimelineView:
 
     def _create_timeline_canvas(self, parent):
         """Create the visual timeline canvas."""
-        timeline_frame = ttk.LabelFrame(parent, text="Timeline", padding="5")
+        timeline_frame = ttk.LabelFrame(parent, text="Timeline")
         timeline_frame.pack(fill=tk.X, pady=(0, 10))
 
         self._timeline_canvas = tk.Canvas(
@@ -177,7 +177,7 @@ class TimelineView:
 
     def _create_activity_list(self, parent):
         """Create the scrollable activity list."""
-        list_frame = ttk.LabelFrame(parent, text="Activities", padding="5")
+        list_frame = ttk.LabelFrame(parent, text="Activities")
         list_frame.pack(fill=tk.BOTH, expand=True)
 
         # Create treeview with scrollbar
@@ -202,7 +202,7 @@ class TimelineView:
 
     def _create_summary_panel(self, parent):
         """Create the summary panel."""
-        summary_frame = ttk.LabelFrame(parent, text="Summary", padding="5")
+        summary_frame = ttk.LabelFrame(parent, text="Summary")
         summary_frame.pack(fill=tk.BOTH, expand=True)
 
         self._summary_text = tk.Text(

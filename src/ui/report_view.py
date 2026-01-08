@@ -7,17 +7,17 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import logging
 
+import tkinter as tk
+from tkinter import filedialog, messagebox
+
 try:
     import ttkbootstrap as ttk
     from ttkbootstrap.constants import *
     from ttkbootstrap import Toplevel
     from ttkbootstrap.dialogs import Messagebox
-    import tkinter as tk
-    from tkinter import filedialog
     TTKBOOTSTRAP_AVAILABLE = True
 except ImportError:
-    import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox
+    from tkinter import ttk
     Toplevel = tk.Toplevel
     Messagebox = None
     TTKBOOTSTRAP_AVAILABLE = False
@@ -100,8 +100,8 @@ class ReportView:
         self.window.protocol("WM_DELETE_WINDOW", self.close)
 
         # Main container
-        main_frame = ttk.Frame(self.window, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame = ttk.Frame(self.window)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Header with view toggle and date navigation
         self._create_header(main_frame)
@@ -153,8 +153,8 @@ class ReportView:
 
     def _create_report_area(self, parent):
         """Create the main report display area."""
-        report_frame = ttk.LabelFrame(parent, text="Report", padding="10")
-        report_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        report_frame = ttk.LabelFrame(parent, text="Report")
+        report_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10), padx=5)
 
         # Summary stats at top
         stats_frame = ttk.Frame(report_frame)
