@@ -14,9 +14,18 @@ import time
 import logging
 import threading
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
-import tkinter as tk
+
+try:
+    import ttkbootstrap as ttk
+    from ttkbootstrap import Window as TtkWindow
+    TTKBOOTSTRAP_AVAILABLE = True
+except ImportError:
+    import tkinter as tk
+    from tkinter import ttk
+    TtkWindow = None
+    TTKBOOTSTRAP_AVAILABLE = False
 
 from database import Database
 from config import Config, ConfigManager
@@ -69,7 +78,7 @@ class ActivityMonitor:
         )
 
         # UI components
-        self._root: Optional[tk.Tk] = None
+        self._root = None  # Will be TtkWindow or tk.Tk
         self.tray_app = TrayApp()
         self.timeline_view: Optional[TimelineView] = None
         self.report_view: Optional[ReportView] = None
@@ -81,6 +90,15 @@ class ActivityMonitor:
         self._tracking_thread: Optional[threading.Thread] = None
         self._current_project: Optional[str] = None
         self._is_active = True
+
+        # Break reminder state
+        self._last_break_time = datetime.now()
+        self._break_reminder_shown = False
+        self._continuous_work_start: Optional[datetime] = None
+
+        # Daily summary state
+        self._daily_summary_shown_today = False
+        self._last_summary_date: Optional[datetime] = None
 
         # Set up tray callbacks
         self._setup_tray()
@@ -101,10 +119,14 @@ class ActivityMonitor:
         if self.camera_detector.is_available:
             self.camera_detector.set_presence_callback(self._on_presence_change)
 
-    def _get_root(self) -> tk.Tk:
+    def _get_root(self):
         """Get or create the tkinter root window."""
         if self._root is None or not self._root.winfo_exists():
-            self._root = tk.Tk()
+            if TTKBOOTSTRAP_AVAILABLE:
+                self._root = TtkWindow(themename=self.config.theme)
+            else:
+                import tkinter as tk
+                self._root = tk.Tk()
             self._root.withdraw()  # Hide the main window
         return self._root
 
@@ -372,9 +394,96 @@ class ActivityMonitor:
         if idle_state['became_idle']:
             logger.info(f"User became idle (was active for {idle_state['active_duration']:.0f}s)")
             print(f">>> STATUS: Now IDLE (yellow icon)")
+            # Reset break timer when going idle (user took a break)
+            self._last_break_time = datetime.now()
+            self._break_reminder_shown = False
+            self._continuous_work_start = None
         elif idle_state['became_active']:
             logger.info(f"User became active (was idle for {idle_state['idle_duration']:.0f}s)")
             print(f">>> STATUS: Now ACTIVE (green icon)")
+            # Start tracking continuous work time
+            if self._continuous_work_start is None:
+                self._continuous_work_start = datetime.now()
+
+        # Check break reminder
+        if is_active:
+            self._check_break_reminder()
+
+        # Check daily summary
+        self._check_daily_summary()
+
+    def _check_break_reminder(self):
+        """Check if it's time to remind user to take a break."""
+        if not self.config.break_reminder_enabled:
+            return
+
+        if self._continuous_work_start is None:
+            self._continuous_work_start = datetime.now()
+            return
+
+        # Calculate continuous work time
+        work_duration = datetime.now() - self._continuous_work_start
+        reminder_threshold = timedelta(minutes=self.config.break_reminder_interval_minutes)
+
+        if work_duration >= reminder_threshold and not self._break_reminder_shown:
+            # Show break reminder
+            work_mins = int(work_duration.total_seconds() / 60)
+            self.tray_app.show_notification(
+                "Time for a Break!",
+                f"You've been working for {work_mins} minutes. Take a short break to stay fresh!"
+            )
+            self._break_reminder_shown = True
+            logger.info(f"Break reminder shown after {work_mins} minutes of work")
+
+    def _check_daily_summary(self):
+        """Check if it's time to show daily summary."""
+        if not self.config.daily_summary_enabled:
+            return
+
+        now = datetime.now()
+
+        # Reset flag if it's a new day
+        if self._last_summary_date is None or self._last_summary_date.date() != now.date():
+            self._daily_summary_shown_today = False
+
+        # Check if it's the right hour and we haven't shown it today
+        if now.hour == self.config.daily_summary_hour and not self._daily_summary_shown_today:
+            self._show_daily_summary()
+            self._daily_summary_shown_today = True
+            self._last_summary_date = now
+
+    def _show_daily_summary(self):
+        """Show the daily summary notification."""
+        try:
+            summary = self.db.get_daily_summary(datetime.now())
+
+            if not summary:
+                return
+
+            total_active = sum(s['active_seconds'] for s in summary)
+            total_all = sum(s.get('total_seconds', s['active_seconds']) for s in summary)
+            total_idle = total_all - total_active
+
+            # Format time
+            active_hours = total_active // 3600
+            active_mins = (total_active % 3600) // 60
+            idle_hours = total_idle // 3600
+            idle_mins = (total_idle % 3600) // 60
+
+            # Get top 3 projects
+            top_projects = summary[:3]
+            projects_text = ", ".join([p['project_name'] for p in top_projects])
+
+            message = (
+                f"Active: {active_hours}h {active_mins}m | Idle: {idle_hours}h {idle_mins}m\n"
+                f"Top: {projects_text}"
+            )
+
+            self.tray_app.show_notification("Daily Summary", message)
+            logger.info(f"Daily summary shown: {total_active}s active, {total_idle}s idle")
+
+        except Exception as e:
+            logger.error(f"Error showing daily summary: {e}")
 
     def stop(self):
         """Stop the activity monitor."""

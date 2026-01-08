@@ -3,11 +3,24 @@ Reports view UI for ActivityMonitor.
 Shows daily and weekly summaries with export functionality.
 """
 
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import logging
+
+try:
+    import ttkbootstrap as ttk
+    from ttkbootstrap.constants import *
+    from ttkbootstrap import Toplevel
+    from ttkbootstrap.dialogs import Messagebox
+    import tkinter as tk
+    from tkinter import filedialog
+    TTKBOOTSTRAP_AVAILABLE = True
+except ImportError:
+    import tkinter as tk
+    from tkinter import ttk, filedialog, messagebox
+    Toplevel = tk.Toplevel
+    Messagebox = None
+    TTKBOOTSTRAP_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +85,16 @@ class ReportView:
     def _create_window(self):
         """Create the report window."""
         if self.parent:
-            self.window = tk.Toplevel(self.parent)
+            self.window = Toplevel(self.parent)
         else:
-            self.window = tk.Tk()
+            if TTKBOOTSTRAP_AVAILABLE:
+                from ttkbootstrap import Window
+                self.window = Window(themename="darkly")
+            else:
+                self.window = tk.Tk()
 
         self.window.title("ActivityMonitor - Reports")
-        self.window.geometry("700x500")
-        self.window.configure(bg='#f0f0f0')
+        self.window.geometry("700x550")
 
         # Handle window close button (X)
         self.window.protocol("WM_DELETE_WINDOW", self.close)
@@ -323,9 +339,9 @@ class ReportView:
         if filepath:
             try:
                 self.db.export_to_csv(self._selected_date, filepath)
-                messagebox.showinfo("Export Complete", f"Summary exported to:\n{filepath}")
+                self._show_info("Export Complete", f"Summary exported to:\n{filepath}")
             except Exception as e:
-                messagebox.showerror("Export Error", f"Failed to export: {e}")
+                self._show_error("Export Error", f"Failed to export: {e}")
 
     def _export_timeline(self):
         """Export detailed timeline to CSV."""
@@ -340,9 +356,9 @@ class ReportView:
         if filepath:
             try:
                 self.db.export_timeline_to_csv(self._selected_date, filepath)
-                messagebox.showinfo("Export Complete", f"Timeline exported to:\n{filepath}")
+                self._show_info("Export Complete", f"Timeline exported to:\n{filepath}")
             except Exception as e:
-                messagebox.showerror("Export Error", f"Failed to export: {e}")
+                self._show_error("Export Error", f"Failed to export: {e}")
 
     def _copy_to_clipboard(self):
         """Copy summary to clipboard as text."""
@@ -375,7 +391,21 @@ class ReportView:
 
         self.window.clipboard_clear()
         self.window.clipboard_append(text)
-        messagebox.showinfo("Copied", "Report copied to clipboard!")
+        self._show_info("Copied", "Report copied to clipboard!")
+
+    def _show_info(self, title: str, message: str):
+        """Show info message using appropriate dialog."""
+        if TTKBOOTSTRAP_AVAILABLE and Messagebox:
+            Messagebox.show_info(message, title=title, parent=self.window)
+        else:
+            messagebox.showinfo(title, message)
+
+    def _show_error(self, title: str, message: str):
+        """Show error message using appropriate dialog."""
+        if TTKBOOTSTRAP_AVAILABLE and Messagebox:
+            Messagebox.show_error(message, title=title, parent=self.window)
+        else:
+            messagebox.showerror(title, message)
 
     def close(self):
         """Close the report window."""

@@ -27,6 +27,18 @@ class Config:
     start_minimized: bool = False
     start_with_windows: bool = False
 
+    # Theme settings
+    theme: str = "darkly"  # ttkbootstrap theme: darkly, superhero, litera, flatly, etc.
+
+    # Daily summary notification
+    daily_summary_enabled: bool = True
+    daily_summary_hour: int = 18  # 6 PM
+
+    # Break reminders
+    break_reminder_enabled: bool = True
+    break_reminder_interval_minutes: int = 50  # Pomodoro-style
+    break_reminder_snooze_minutes: int = 10
+
     # Project detection
     visual_studio_solution_detection: bool = True
     default_project: str = "Uncategorized"

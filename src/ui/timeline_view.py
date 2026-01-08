@@ -3,11 +3,21 @@ Timeline view UI for ActivityMonitor.
 Shows a visual breakdown of activities throughout the day.
 """
 
-import tkinter as tk
-from tkinter import ttk
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import logging
+
+try:
+    import ttkbootstrap as ttk
+    from ttkbootstrap.constants import *
+    from ttkbootstrap import Toplevel
+    import tkinter as tk
+    TTKBOOTSTRAP_AVAILABLE = True
+except ImportError:
+    import tkinter as tk
+    from tkinter import ttk
+    Toplevel = tk.Toplevel
+    TTKBOOTSTRAP_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -85,13 +95,16 @@ class TimelineView:
     def _create_window(self):
         """Create the timeline window."""
         if self.parent:
-            self.window = tk.Toplevel(self.parent)
+            self.window = Toplevel(self.parent)
         else:
-            self.window = tk.Tk()
+            if TTKBOOTSTRAP_AVAILABLE:
+                from ttkbootstrap import Window
+                self.window = Window(themename="darkly")
+            else:
+                self.window = tk.Tk()
 
         self.window.title("ActivityMonitor - Timeline")
-        self.window.geometry("900x600")
-        self.window.configure(bg='#f0f0f0')
+        self.window.geometry("900x650")
 
         # Handle window close button (X)
         self.window.protocol("WM_DELETE_WINDOW", self.close)

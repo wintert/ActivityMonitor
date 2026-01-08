@@ -3,10 +3,22 @@ Settings view UI for ActivityMonitor.
 Allows users to configure application settings.
 """
 
-import tkinter as tk
-from tkinter import ttk, messagebox
 from typing import Optional, Callable
 import logging
+
+try:
+    import ttkbootstrap as ttk
+    from ttkbootstrap.constants import *
+    from ttkbootstrap import Toplevel
+    from ttkbootstrap.dialogs import Messagebox
+    import tkinter as tk
+    TTKBOOTSTRAP_AVAILABLE = True
+except ImportError:
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+    Toplevel = tk.Toplevel
+    Messagebox = None
+    TTKBOOTSTRAP_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -70,14 +82,17 @@ class SettingsView:
         """Create the settings window."""
         # Always create as Toplevel - works better with tray app
         if self.parent:
-            self.window = tk.Toplevel(self.parent)
+            self.window = Toplevel(self.parent)
         else:
-            self.window = tk.Toplevel()
+            if TTKBOOTSTRAP_AVAILABLE:
+                from ttkbootstrap import Window
+                self.window = Window(themename="darkly")
+            else:
+                self.window = tk.Toplevel()
 
         self.window.title("ActivityMonitor - Settings")
-        self.window.geometry("500x620")
+        self.window.geometry("520x750")
         self.window.resizable(True, True)
-        self.window.configure(bg='#f0f0f0')
 
         # Handle window close button (X)
         self.window.protocol("WM_DELETE_WINDOW", self.close)
@@ -90,6 +105,9 @@ class SettingsView:
         self._create_idle_section(main_frame)
         self._create_camera_section(main_frame)
         self._create_tracking_section(main_frame)
+        self._create_theme_section(main_frame)
+        self._create_break_reminder_section(main_frame)
+        self._create_daily_summary_section(main_frame)
         self._create_startup_section(main_frame)
 
         # Buttons
@@ -282,6 +300,106 @@ class SettingsView:
             variable=self._vars['vs_detection']
         ).pack(anchor='w', pady=(10, 0))
 
+    def _create_theme_section(self, parent):
+        """Create theme settings section."""
+        frame = ttk.LabelFrame(parent, text="Appearance", padding="10")
+        frame.pack(fill=tk.X, pady=(0, 10))
+
+        row = ttk.Frame(frame)
+        row.pack(fill=tk.X, pady=2)
+
+        ttk.Label(row, text="Theme:", width=20, anchor='w').pack(side=tk.LEFT)
+
+        self._vars['theme'] = tk.StringVar()
+        theme_combo = ttk.Combobox(
+            row,
+            textvariable=self._vars['theme'],
+            values=['darkly', 'superhero', 'cyborg', 'vapor', 'solar',
+                    'litera', 'flatly', 'minty', 'cosmo', 'journal'],
+            state='readonly',
+            width=15
+        )
+        theme_combo.pack(side=tk.LEFT, padx=(5, 0))
+
+        ttk.Label(
+            frame,
+            text="Requires restart to apply. Dark themes: darkly, superhero, cyborg, vapor, solar.",
+            font=('Segoe UI', 8),
+            foreground='#888'
+        ).pack(anchor='w', pady=(5, 0))
+
+    def _create_break_reminder_section(self, parent):
+        """Create break reminder settings section."""
+        frame = ttk.LabelFrame(parent, text="Break Reminders", padding="10")
+        frame.pack(fill=tk.X, pady=(0, 10))
+
+        # Enable break reminders
+        self._vars['break_reminder_enabled'] = tk.BooleanVar()
+        ttk.Checkbutton(
+            frame,
+            text="Enable break reminders",
+            variable=self._vars['break_reminder_enabled']
+        ).pack(anchor='w')
+
+        # Interval
+        row = ttk.Frame(frame)
+        row.pack(fill=tk.X, pady=(5, 2))
+
+        ttk.Label(row, text="Remind after:", width=20, anchor='w').pack(side=tk.LEFT)
+
+        self._vars['break_interval'] = tk.StringVar()
+        interval_combo = ttk.Combobox(
+            row,
+            textvariable=self._vars['break_interval'],
+            values=['25 minutes', '30 minutes', '45 minutes', '50 minutes', '60 minutes'],
+            state='readonly',
+            width=15
+        )
+        interval_combo.pack(side=tk.LEFT, padx=(5, 0))
+
+        ttk.Label(
+            frame,
+            text="Get reminded to take a break after continuous work. Resets when idle.",
+            font=('Segoe UI', 8),
+            foreground='#888'
+        ).pack(anchor='w', pady=(5, 0))
+
+    def _create_daily_summary_section(self, parent):
+        """Create daily summary settings section."""
+        frame = ttk.LabelFrame(parent, text="Daily Summary", padding="10")
+        frame.pack(fill=tk.X, pady=(0, 10))
+
+        # Enable daily summary
+        self._vars['daily_summary_enabled'] = tk.BooleanVar()
+        ttk.Checkbutton(
+            frame,
+            text="Show daily summary notification",
+            variable=self._vars['daily_summary_enabled']
+        ).pack(anchor='w')
+
+        # Time
+        row = ttk.Frame(frame)
+        row.pack(fill=tk.X, pady=(5, 2))
+
+        ttk.Label(row, text="Summary time:", width=20, anchor='w').pack(side=tk.LEFT)
+
+        self._vars['daily_summary_hour'] = tk.StringVar()
+        hour_combo = ttk.Combobox(
+            row,
+            textvariable=self._vars['daily_summary_hour'],
+            values=['5 PM', '6 PM', '7 PM', '8 PM', '9 PM'],
+            state='readonly',
+            width=15
+        )
+        hour_combo.pack(side=tk.LEFT, padx=(5, 0))
+
+        ttk.Label(
+            frame,
+            text="Shows total active time, idle time, and top projects for the day.",
+            font=('Segoe UI', 8),
+            foreground='#888'
+        ).pack(anchor='w', pady=(5, 0))
+
     def _create_startup_section(self, parent):
         """Create startup settings section."""
         frame = ttk.LabelFrame(parent, text="Startup", padding="10")
@@ -368,6 +486,19 @@ class SettingsView:
 
         self._vars['vs_detection'].set(config.visual_studio_solution_detection)
 
+        # Theme settings
+        self._vars['theme'].set(config.theme)
+
+        # Break reminder settings
+        self._vars['break_reminder_enabled'].set(config.break_reminder_enabled)
+        break_map = {25: '25 minutes', 30: '30 minutes', 45: '45 minutes', 50: '50 minutes', 60: '60 minutes'}
+        self._vars['break_interval'].set(break_map.get(config.break_reminder_interval_minutes, '50 minutes'))
+
+        # Daily summary settings
+        self._vars['daily_summary_enabled'].set(config.daily_summary_enabled)
+        hour_map = {17: '5 PM', 18: '6 PM', 19: '7 PM', 20: '8 PM', 21: '9 PM'}
+        self._vars['daily_summary_hour'].set(hour_map.get(config.daily_summary_hour, '6 PM'))
+
         # Startup settings
         self._vars['start_minimized'].set(config.start_minimized)
         self._vars['start_with_windows'].set(config.start_with_windows)
@@ -385,6 +516,8 @@ class SettingsView:
             threshold_map = {'15 seconds': 15, '30 seconds': 30, '45 seconds': 45, '60 seconds': 60}
             polling_map = {'3 seconds': 3, '5 seconds': 5, '10 seconds': 10, '15 seconds': 15}
             device_map = {'Camera 0 (Default)': 0, 'Camera 1': 1, 'Camera 2': 2}
+            break_map = {'25 minutes': 25, '30 minutes': 30, '45 minutes': 45, '50 minutes': 50, '60 minutes': 60}
+            hour_map = {'5 PM': 17, '6 PM': 18, '7 PM': 19, '8 PM': 20, '9 PM': 21}
 
             self.config_manager.update(
                 idle_timeout_minutes=idle_map.get(self._vars['idle_timeout'].get(), 3),
@@ -394,6 +527,11 @@ class SettingsView:
                 camera_device_index=device_map.get(self._vars['camera_device'].get(), 0),
                 polling_interval_seconds=polling_map.get(self._vars['polling_interval'].get(), 5),
                 visual_studio_solution_detection=self._vars['vs_detection'].get(),
+                theme=self._vars['theme'].get(),
+                break_reminder_enabled=self._vars['break_reminder_enabled'].get(),
+                break_reminder_interval_minutes=break_map.get(self._vars['break_interval'].get(), 50),
+                daily_summary_enabled=self._vars['daily_summary_enabled'].get(),
+                daily_summary_hour=hour_map.get(self._vars['daily_summary_hour'].get(), 18),
                 start_minimized=self._vars['start_minimized'].get(),
                 start_with_windows=self._vars['start_with_windows'].get(),
                 show_notifications=self._vars['show_notifications'].get()
@@ -402,18 +540,39 @@ class SettingsView:
             if self.on_save:
                 self.on_save()
 
-            messagebox.showinfo("Settings Saved", "Your settings have been saved.")
+            self._show_info("Settings Saved", "Your settings have been saved.")
             self.close()
 
         except Exception as e:
             logger.error(f"Failed to save settings: {e}")
-            messagebox.showerror("Error", f"Failed to save settings: {e}")
+            self._show_error("Error", f"Failed to save settings: {e}")
 
     def _reset_to_defaults(self):
         """Reset all settings to defaults."""
-        if messagebox.askyesno("Reset Settings", "Reset all settings to defaults?"):
+        if self._show_yesno("Reset Settings", "Reset all settings to defaults?"):
             self.config_manager.reset_to_defaults()
             self._load_current_settings()
+
+    def _show_info(self, title: str, message: str):
+        """Show info message using appropriate dialog."""
+        if TTKBOOTSTRAP_AVAILABLE and Messagebox:
+            Messagebox.show_info(message, title=title, parent=self.window)
+        else:
+            messagebox.showinfo(title, message)
+
+    def _show_error(self, title: str, message: str):
+        """Show error message using appropriate dialog."""
+        if TTKBOOTSTRAP_AVAILABLE and Messagebox:
+            Messagebox.show_error(message, title=title, parent=self.window)
+        else:
+            messagebox.showerror(title, message)
+
+    def _show_yesno(self, title: str, message: str) -> bool:
+        """Show yes/no dialog using appropriate dialog."""
+        if TTKBOOTSTRAP_AVAILABLE and Messagebox:
+            return Messagebox.yesno(message, title=title, parent=self.window) == "Yes"
+        else:
+            return messagebox.askyesno(title, message)
 
     def close(self):
         """Close the settings window."""
