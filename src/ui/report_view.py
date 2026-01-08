@@ -222,17 +222,17 @@ class ReportView:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
     def _create_charts(self, parent):
-        """Create the charts area with pie chart and bar chart."""
-        # Create figure with two subplots
-        self._fig = Figure(figsize=(8, 4), dpi=100)
+        """Create the charts area with pie chart and bar chart stacked vertically."""
+        # Create figure with two subplots stacked vertically
+        self._fig = Figure(figsize=(10, 8), dpi=100)
         self._fig.patch.set_facecolor('#2b3e50')  # Match dark theme
 
-        # Pie chart (left)
-        self._pie_ax = self._fig.add_subplot(121)
+        # Pie chart (top)
+        self._pie_ax = self._fig.add_subplot(211)
         self._pie_ax.set_facecolor('#2b3e50')
 
-        # Bar chart (right)
-        self._bar_ax = self._fig.add_subplot(122)
+        # Bar chart (bottom)
+        self._bar_ax = self._fig.add_subplot(212)
         self._bar_ax.set_facecolor('#2b3e50')
 
         # Embed in tkinter
@@ -247,45 +247,71 @@ class ReportView:
         # Clear previous charts
         self._pie_ax.clear()
         self._bar_ax.clear()
+        self._pie_ax.set_facecolor('#2b3e50')
+        self._bar_ax.set_facecolor('#2b3e50')
 
         if not data:
-            self._pie_ax.text(0.5, 0.5, 'No data', ha='center', va='center', color='white')
-            self._bar_ax.text(0.5, 0.5, 'No data', ha='center', va='center', color='white')
+            self._pie_ax.text(0.5, 0.5, 'No data', ha='center', va='center', color='white', fontsize=14)
+            self._bar_ax.text(0.5, 0.5, 'No data', ha='center', va='center', color='white', fontsize=14)
             self._chart_canvas.draw()
             return
 
-        # Prepare data for pie chart
-        projects = [item['project_name'] for item in data[:8]]  # Top 8 projects
-        seconds = [item.get('active_seconds', 0) for item in data[:8]]
+        # Prepare data - limit to top 6 projects for readability
+        projects = [item['project_name'] for item in data[:6]]
+        seconds = [item.get('active_seconds', 0) for item in data[:6]]
         colors = [self._get_project_color(p) for p in projects]
+
+        # Truncate long project names
+        display_names = [p[:20] + '...' if len(p) > 20 else p for p in projects]
 
         # Draw pie chart
         if sum(seconds) > 0:
             wedges, texts, autotexts = self._pie_ax.pie(
                 seconds,
-                labels=projects,
                 colors=colors,
-                autopct=lambda pct: f'{pct:.1f}%' if pct > 5 else '',
+                autopct=lambda pct: f'{pct:.1f}%' if pct > 3 else '',
                 startangle=90,
-                textprops={'color': 'white', 'fontsize': 8}
+                textprops={'color': 'white', 'fontsize': 10},
+                pctdistance=0.75
             )
-            self._pie_ax.set_title('Time Distribution', color='white', fontsize=10)
+            # Add legend instead of labels on pie (cleaner look)
+            self._pie_ax.legend(
+                wedges, display_names,
+                loc='center left',
+                bbox_to_anchor=(1, 0.5),
+                fontsize=9,
+                frameon=False,
+                labelcolor='white'
+            )
+            self._pie_ax.set_title('Time Distribution', color='white', fontsize=12, fontweight='bold', pad=10)
         else:
-            self._pie_ax.text(0.5, 0.5, 'No activity', ha='center', va='center', color='white')
+            self._pie_ax.text(0.5, 0.5, 'No activity', ha='center', va='center', color='white', fontsize=14)
 
         # Draw bar chart (hours per project)
         if projects and sum(seconds) > 0:
             hours = [s / 3600 for s in seconds]
             y_pos = range(len(projects))
-            bars = self._bar_ax.barh(y_pos, hours, color=colors)
+            bars = self._bar_ax.barh(y_pos, hours, color=colors, height=0.6)
             self._bar_ax.set_yticks(y_pos)
-            self._bar_ax.set_yticklabels(projects, fontsize=8, color='white')
-            self._bar_ax.set_xlabel('Hours', color='white', fontsize=9)
-            self._bar_ax.set_title('Hours by Project', color='white', fontsize=10)
-            self._bar_ax.tick_params(axis='x', colors='white')
+            self._bar_ax.set_yticklabels(display_names, fontsize=10, color='white')
+            self._bar_ax.set_xlabel('Hours', color='white', fontsize=11)
+            self._bar_ax.set_title('Hours by Project', color='white', fontsize=12, fontweight='bold', pad=10)
+            self._bar_ax.tick_params(axis='x', colors='white', labelsize=10)
+            self._bar_ax.tick_params(axis='y', colors='white')
             self._bar_ax.invert_yaxis()  # Top project at top
 
-        self._fig.tight_layout()
+            # Add hour labels on bars
+            for i, (bar, hour) in enumerate(zip(bars, hours)):
+                if hour > 0:
+                    label = f'{hour:.1f}h' if hour >= 1 else f'{int(hour*60)}m'
+                    self._bar_ax.text(bar.get_width() + 0.05, bar.get_y() + bar.get_height()/2,
+                                     label, va='center', color='white', fontsize=9)
+
+            # Add some padding to x-axis
+            max_hours = max(hours) if hours else 1
+            self._bar_ax.set_xlim(0, max_hours * 1.2)
+
+        self._fig.tight_layout(pad=2.0)
         self._chart_canvas.draw()
 
     def _create_export_buttons(self, parent):
