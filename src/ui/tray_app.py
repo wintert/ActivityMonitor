@@ -45,6 +45,7 @@ class TrayApp:
         self._on_show_timeline: Optional[Callable] = None
         self._on_show_reports: Optional[Callable] = None
         self._on_show_settings: Optional[Callable] = None
+        self._on_show_mappings: Optional[Callable] = None
         self._on_toggle_pause: Optional[Callable] = None
         self._on_exit: Optional[Callable] = None
 
@@ -58,6 +59,7 @@ class TrayApp:
         on_show_timeline: Optional[Callable] = None,
         on_show_reports: Optional[Callable] = None,
         on_show_settings: Optional[Callable] = None,
+        on_show_mappings: Optional[Callable] = None,
         on_toggle_pause: Optional[Callable] = None,
         on_exit: Optional[Callable] = None
     ):
@@ -65,6 +67,7 @@ class TrayApp:
         self._on_show_timeline = on_show_timeline
         self._on_show_reports = on_show_reports
         self._on_show_settings = on_show_settings
+        self._on_show_mappings = on_show_mappings
         self._on_toggle_pause = on_toggle_pause
         self._on_exit = on_exit
 
@@ -155,6 +158,10 @@ class TrayApp:
                 "Settings",
                 self._handle_show_settings
             ),
+            Item(
+                "Project Mappings",
+                self._handle_show_mappings
+            ),
             Item("─" * 20, None, enabled=False),
             Item(
                 "Exit",
@@ -176,6 +183,11 @@ class TrayApp:
         """Handle settings menu click."""
         if self._on_show_settings:
             self._on_show_settings()
+
+    def _handle_show_mappings(self, icon, item):
+        """Handle project mappings menu click."""
+        if self._on_show_mappings:
+            self._on_show_mappings()
 
     def _handle_toggle_pause(self, icon, item):
         """Handle pause/resume menu click."""

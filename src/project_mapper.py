@@ -60,7 +60,9 @@ class ProjectMapper:
     def __init__(self, database=None):
         self.db = database
         self._custom_rules: List[ProjectRule] = []
+        self._display_mappings: List[Dict] = []
         self._load_rules()
+        self._load_display_mappings()
 
     def _load_rules(self):
         """Load custom rules from database."""
@@ -86,6 +88,57 @@ class ProjectMapper:
         """Add a custom mapping rule."""
         self._custom_rules.append(rule)
         self._custom_rules.sort(key=lambda r: r.priority, reverse=True)
+
+    def _load_display_mappings(self):
+        """Load display name mappings from database."""
+        if self.db is None:
+            return
+        self._display_mappings = self.db.get_mappings(enabled_only=True)
+
+    def reload_mappings(self):
+        """Reload mappings from database (call after adding/editing mappings)."""
+        self._load_display_mappings()
+
+    def apply_display_mappings(self, project_name: str, process_name: str,
+                                window_title: str) -> str:
+        """
+        Apply custom display name mappings to transform project name.
+
+        Mappings are checked in priority order:
+        - 'process': Match against process_name (e.g., "devenv.exe" → "Visual Studio")
+        - 'project': Match against detected project (e.g., "EwaveShamirUmbraco13" → "Shamir Website")
+        - 'window': Match against window title (contains match)
+
+        Args:
+            project_name: The detected project name
+            process_name: The process name (e.g., "devenv.exe")
+            window_title: The window title
+
+        Returns:
+            Mapped display name, or original project_name if no mapping matches
+        """
+        for mapping in self._display_mappings:
+            match_type = mapping['match_type']
+            match_value = mapping['match_value'].lower()
+            display_name = mapping['display_name']
+
+            if match_type == 'process':
+                # Match against process name (case-insensitive)
+                if process_name and match_value in process_name.lower():
+                    return display_name
+
+            elif match_type == 'project':
+                # Match against detected project name (case-insensitive)
+                if project_name and match_value in project_name.lower():
+                    return display_name
+
+            elif match_type == 'window':
+                # Match against window title (contains, case-insensitive)
+                if window_title and match_value in window_title.lower():
+                    return display_name
+
+        # No mapping found, return original
+        return project_name
 
     def map_activity(self, process_name: str, window_title: str) -> Optional[str]:
         """

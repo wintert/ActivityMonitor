@@ -38,6 +38,7 @@ from ui.tray_app import TrayApp
 from ui.timeline_view import TimelineView
 from ui.report_view import ReportView
 from ui.settings_view import SettingsView
+from ui.project_mappings_view import ProjectMappingsView
 
 # Configure logging
 logging.basicConfig(
@@ -84,6 +85,7 @@ class ActivityMonitor:
         self.timeline_view: Optional[TimelineView] = None
         self.report_view: Optional[ReportView] = None
         self.settings_view: Optional[SettingsView] = None
+        self.mappings_view: Optional[ProjectMappingsView] = None
 
         # State
         self._running = False
@@ -112,6 +114,7 @@ class ActivityMonitor:
             on_show_timeline=self._show_timeline,
             on_show_reports=self._show_reports,
             on_show_settings=self._show_settings,
+            on_show_mappings=self._show_mappings,
             on_toggle_pause=self._toggle_pause,
             on_exit=self._exit
         )
@@ -186,6 +189,25 @@ class ActivityMonitor:
         except Exception as e:
             print(f">>> DEBUG ERROR: {e}")
             logger.error(f"Error showing settings: {e}", exc_info=True)
+
+    def _show_mappings(self):
+        """Show the project mappings view (called from tray thread)."""
+        logger.info("Opening project mappings view")
+        self._schedule_ui_action(self._do_show_mappings)
+
+    def _do_show_mappings(self):
+        """Actually show project mappings (runs on main thread)."""
+        try:
+            root = self._get_root()
+            if self.mappings_view is None:
+                self.mappings_view = ProjectMappingsView(
+                    self.db,
+                    self.project_mapper,
+                    root
+                )
+            self.mappings_view.show()
+        except Exception as e:
+            logger.error(f"Error showing project mappings: {e}", exc_info=True)
 
     def _schedule_ui_action(self, action):
         """Schedule a UI action to run on the main thread."""
@@ -375,6 +397,14 @@ class ActivityMonitor:
                 window.title  # Use original title for mapping (has more context)
             )
 
+        # Apply custom display name mappings
+        if project:
+            project = self.project_mapper.apply_display_mappings(
+                project,
+                window.process_name,
+                window.title
+            )
+
         self._current_project = project
 
         # Log activity with cleaned title
@@ -512,6 +542,8 @@ class ActivityMonitor:
             self.report_view.close()
         if self.settings_view:
             self.settings_view.close()
+        if self.mappings_view:
+            self.mappings_view.close()
 
         # Destroy root window
         if self._root:

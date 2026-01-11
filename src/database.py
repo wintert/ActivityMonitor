@@ -63,6 +63,19 @@ class Database:
             )
         ''')
 
+        # Project mappings table - for custom display name mappings
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS project_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_type TEXT NOT NULL,
+                match_value TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                priority INTEGER DEFAULT 1,
+                enabled BOOLEAN DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         # Create indexes for common queries
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_activities_timestamp
@@ -270,6 +283,81 @@ class Database:
             INSERT OR REPLACE INTO settings (key, value)
             VALUES (?, ?)
         ''', (key, value_json))
+
+        conn.commit()
+        conn.close()
+
+    # Project Mapping operations
+    def add_mapping(self, match_type: str, match_value: str, display_name: str,
+                    priority: int = 1, enabled: bool = True) -> int:
+        """Add a new project mapping."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            INSERT INTO project_mappings (match_type, match_value, display_name, priority, enabled)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (match_type, match_value, display_name, priority, enabled))
+
+        mapping_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return mapping_id
+
+    def get_mappings(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+        """Get all project mappings, ordered by priority (highest first)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if enabled_only:
+            cursor.execute('''
+                SELECT * FROM project_mappings
+                WHERE enabled = 1
+                ORDER BY priority DESC, id ASC
+            ''')
+        else:
+            cursor.execute('''
+                SELECT * FROM project_mappings
+                ORDER BY priority DESC, id ASC
+            ''')
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [dict(row) for row in rows]
+
+    def update_mapping(self, mapping_id: int, **kwargs):
+        """Update a project mapping."""
+        if not kwargs:
+            return
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Build update query dynamically
+        valid_fields = ['match_type', 'match_value', 'display_name', 'priority', 'enabled']
+        updates = []
+        values = []
+
+        for field, value in kwargs.items():
+            if field in valid_fields:
+                updates.append(f'{field} = ?')
+                values.append(value)
+
+        if updates:
+            values.append(mapping_id)
+            query = f"UPDATE project_mappings SET {', '.join(updates)} WHERE id = ?"
+            cursor.execute(query, values)
+            conn.commit()
+
+        conn.close()
+
+    def delete_mapping(self, mapping_id: int):
+        """Delete a project mapping."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('DELETE FROM project_mappings WHERE id = ?', (mapping_id,))
 
         conn.commit()
         conn.close()
