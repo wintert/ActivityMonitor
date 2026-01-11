@@ -222,26 +222,31 @@ class ProjectMapper:
         if 'microsoft visual studio' not in title_lower:
             return None
 
-        # Try to extract the solution/project name
-        # Pattern: "FileName.cs - SolutionName - Microsoft Visual Studio"
-        # Or: "SolutionName - Microsoft Visual Studio"
+        # Visual Studio title formats:
+        # "SolutionName - FileName.cs - Microsoft Visual Studio (Administrator)"
+        # "SolutionName - Microsoft Visual Studio"
+        # The solution name is ALWAYS the FIRST part
         parts = window_title.split(' - ')
 
         if len(parts) >= 2:
-            # Find the part just before "Microsoft Visual Studio"
-            for i, part in enumerate(parts):
-                if 'microsoft visual studio' in part.lower():
-                    if i > 0:
-                        # Get the previous part as solution name
-                        solution = parts[i - 1].strip()
-                        # Remove status indicators like (Running), (Debugging), etc.
-                        solution = re.sub(r'\s*\([^)]*\)\s*$', '', solution).strip()
-                        # Remove [Administrator] or similar
-                        solution = re.sub(r'\s*\[[^\]]*\]\s*$', '', solution).strip()
+            # The solution name is the FIRST part
+            solution = parts[0].strip()
 
-                        if solution and solution.lower() not in ['untitled', 'new project']:
-                            return solution
-                    break
+            # Remove status indicators like (Running), (Debugging), etc.
+            solution = re.sub(r'\s*\([^)]*\)\s*$', '', solution).strip()
+            # Remove [Administrator] or similar
+            solution = re.sub(r'\s*\[[^\]]*\]\s*$', '', solution).strip()
+
+            # Skip if it looks like a file name (has extension)
+            if solution and '.' in solution and len(solution.split('.')[-1]) <= 5:
+                # This might be a filename, try the second part
+                if len(parts) >= 3:
+                    solution = parts[1].strip()
+                    solution = re.sub(r'\s*\([^)]*\)\s*$', '', solution).strip()
+                    solution = re.sub(r'\s*\[[^\]]*\]\s*$', '', solution).strip()
+
+            if solution and solution.lower() not in ['untitled', 'new project']:
+                return solution
 
         # Fallback: try regex pattern
         match = self.VISUAL_STUDIO_TITLE_PATTERN.match(window_title)
