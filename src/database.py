@@ -89,6 +89,9 @@ class Database:
         conn.commit()
         conn.close()
 
+        # Seed default mappings if this is a fresh database
+        self.seed_default_mappings()
+
     # Activity operations
     def log_activity(self, window_title: str, process_name: str,
                      project_name: Optional[str], is_active: bool,
@@ -361,6 +364,34 @@ class Database:
 
         conn.commit()
         conn.close()
+
+    def seed_default_mappings(self):
+        """Add default app mappings if none exist."""
+        # Check if any mappings exist
+        existing = self.get_mappings()
+        if existing:
+            return  # Don't overwrite existing mappings
+
+        # Default app name mappings (process → friendly name)
+        default_mappings = [
+            ('process', 'devenv.exe', 'Visual Studio', 10),
+            ('process', 'Code.exe', 'VS Code', 10),
+            ('process', 'code', 'VS Code', 10),
+            ('process', 'chrome.exe', 'Chrome', 5),
+            ('process', 'firefox.exe', 'Firefox', 5),
+            ('process', 'msedge.exe', 'Edge', 5),
+            ('process', 'OUTLOOK.EXE', 'Outlook', 5),
+            ('process', 'Teams.exe', 'Teams', 5),
+            ('process', 'slack.exe', 'Slack', 5),
+            ('process', 'WINWORD.EXE', 'Word', 5),
+            ('process', 'EXCEL.EXE', 'Excel', 5),
+            ('process', 'POWERPNT.EXE', 'PowerPoint', 5),
+            ('process', 'notepad.exe', 'Notepad', 3),
+            ('process', 'explorer.exe', 'Explorer', 3),
+        ]
+
+        for match_type, match_value, display_name, priority in default_mappings:
+            self.add_mapping(match_type, match_value, display_name, priority, True)
 
     # Export functionality
     def export_to_csv(self, date: datetime, filepath: str):

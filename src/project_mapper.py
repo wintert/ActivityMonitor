@@ -104,10 +104,9 @@ class ProjectMapper:
         """
         Apply custom display name mappings to transform project name.
 
-        Mappings are checked in priority order:
-        - 'process': Match against process_name (e.g., "devenv.exe" → "Visual Studio")
-        - 'project': Match against detected project (e.g., "EwaveShamirUmbraco13" → "Shamir Website")
-        - 'window': Match against window title (contains match)
+        Creates a combined format: "App - Project" where:
+        - App comes from process mapping (e.g., "devenv.exe" → "Visual Studio")
+        - Project comes from project mapping (e.g., "EwaveShamirUmbraco13" → "Shamir Website")
 
         Args:
             project_name: The detected project name
@@ -115,30 +114,47 @@ class ProjectMapper:
             window_title: The window title
 
         Returns:
-            Mapped display name, or original project_name if no mapping matches
+            Combined display name in format "App - Project", or just project if no app mapping
         """
+        app_name = None
+        mapped_project = project_name
+
+        # First pass: find app name from process mapping
         for mapping in self._display_mappings:
-            match_type = mapping['match_type']
-            match_value = mapping['match_value'].lower()
-            display_name = mapping['display_name']
-
-            if match_type == 'process':
-                # Match against process name (case-insensitive)
+            if mapping['match_type'] == 'process':
+                match_value = mapping['match_value'].lower()
                 if process_name and match_value in process_name.lower():
-                    return display_name
+                    app_name = mapping['display_name']
+                    break
 
-            elif match_type == 'project':
-                # Match against detected project name (case-insensitive)
+        # Second pass: find project name mapping
+        for mapping in self._display_mappings:
+            if mapping['match_type'] == 'project':
+                match_value = mapping['match_value'].lower()
                 if project_name and match_value in project_name.lower():
-                    return display_name
+                    mapped_project = mapping['display_name']
+                    break
 
-            elif match_type == 'window':
-                # Match against window title (contains, case-insensitive)
+        # Third pass: check window title mappings (can override everything)
+        for mapping in self._display_mappings:
+            if mapping['match_type'] == 'window':
+                match_value = mapping['match_value'].lower()
                 if window_title and match_value in window_title.lower():
-                    return display_name
+                    # Window mapping overrides the project name
+                    mapped_project = mapping['display_name']
+                    break
 
-        # No mapping found, return original
-        return project_name
+        # Combine app and project if both exist
+        if app_name and mapped_project:
+            # Avoid duplication like "Visual Studio - Visual Studio"
+            if app_name.lower() != mapped_project.lower():
+                return f"{app_name} - {mapped_project}"
+            else:
+                return app_name
+        elif app_name:
+            return app_name
+        else:
+            return mapped_project
 
     def map_activity(self, process_name: str, window_title: str) -> Optional[str]:
         """
