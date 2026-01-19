@@ -31,3 +31,7 @@ build/
 dist/
 *.egg-info/
 *.exe
+
+# Admiral automation (sensitive session data)
+admiral_auth_state.json
+admiral_project_mappings.json

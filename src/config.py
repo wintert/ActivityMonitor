@@ -63,6 +63,11 @@ class Config:
     # Teams meeting tracking
     teams_background_tracking_enabled: bool = True  # Track Teams meetings when not focused
 
+    # Admiral time reporting automation
+    admiral_enabled: bool = True
+    admiral_url: str = "https://admiral.co.il/AdmiralPro_ssl2//Main/Frame_Main.aspx?C=F1308D9B"
+    admiral_default_comment: str = "פיתוח"  # Default comment for time entries
+
     # Data retention
     keep_data_days: int = 90
 
