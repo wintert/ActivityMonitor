@@ -40,10 +40,21 @@ class Database:
                 window_title TEXT,
                 process_name TEXT,
                 project_name TEXT,
+                category TEXT,
                 is_active BOOLEAN DEFAULT 1,
                 duration_seconds INTEGER DEFAULT 5
             )
         ''')
+
+        # Add category column if it doesn't exist (migration for existing databases)
+        cursor.execute("PRAGMA table_info(activities)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'category' not in columns:
+            cursor.execute('ALTER TABLE activities ADD COLUMN category TEXT')
+
+        # Add project_tag column if it doesn't exist (migration for project tags feature)
+        if 'project_tag' not in columns:
+            cursor.execute('ALTER TABLE activities ADD COLUMN project_tag TEXT')
 
         # Projects table
         cursor.execute('''
@@ -76,6 +87,18 @@ class Database:
             )
         ''')
 
+        # Project tags table - for grouping activities by project
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS project_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                keywords TEXT NOT NULL,
+                color TEXT DEFAULT '#4A90D9',
+                enabled BOOLEAN DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         # Create indexes for common queries
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_activities_timestamp
@@ -95,7 +118,9 @@ class Database:
     # Activity operations
     def log_activity(self, window_title: str, process_name: str,
                      project_name: Optional[str], is_active: bool,
-                     duration_seconds: int = 5) -> int:
+                     duration_seconds: int = 5,
+                     category: Optional[str] = None,
+                     project_tag: Optional[str] = None) -> int:
         """Log a single activity record."""
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -104,16 +129,18 @@ class Database:
         local_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         cursor.execute('''
-            INSERT INTO activities (timestamp, window_title, process_name, project_name, is_active, duration_seconds)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (local_time, window_title, process_name, project_name, is_active, duration_seconds))
+            INSERT INTO activities (timestamp, window_title, process_name, project_name, category, is_active, duration_seconds, project_tag)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (local_time, window_title, process_name, project_name, category, is_active, duration_seconds, project_tag))
 
         activity_id = cursor.lastrowid
         conn.commit()
         conn.close()
         return activity_id
 
-    def get_activities_for_date(self, date: datetime) -> List[Dict[str, Any]]:
+    def get_activities_for_date(self, date: datetime,
+                                hidden_categories: Optional[List[str]] = None,
+                                hidden_apps: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """Get all activities for a specific date."""
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -125,17 +152,41 @@ class Database:
         start_str = start.strftime('%Y-%m-%d %H:%M:%S')
         end_str = end.strftime('%Y-%m-%d %H:%M:%S')
 
-        cursor.execute('''
+        query = '''
             SELECT * FROM activities
             WHERE timestamp >= ? AND timestamp < ?
-            ORDER BY timestamp
-        ''', (start_str, end_str))
+        '''
+        params = [start_str, end_str]
+
+        if hidden_categories:
+            placeholders = ','.join('?' * len(hidden_categories))
+            query += f' AND (category IS NULL OR category NOT IN ({placeholders}))'
+            params.extend(hidden_categories)
+
+        query += ' ORDER BY timestamp'
+
+        cursor.execute(query, params)
 
         rows = cursor.fetchall()
         conn.close()
-        return [dict(row) for row in rows]
 
-    def get_daily_summary(self, date: datetime) -> List[Dict[str, Any]]:
+        # Filter out hidden apps
+        results = [dict(row) for row in rows]
+        if hidden_apps:
+            results = [r for r in results if not self._is_app_hidden(r.get('project_name', ''), hidden_apps)]
+
+        return results
+
+    def _is_app_hidden(self, project_name: str, hidden_apps: List[str]) -> bool:
+        """Check if an app/activity should be hidden based on hidden_apps patterns."""
+        if not hidden_apps or not project_name:
+            return False
+        project_lower = project_name.lower()
+        return any(pattern.lower() in project_lower for pattern in hidden_apps)
+
+    def get_daily_summary(self, date: datetime,
+                          hidden_categories: Optional[List[str]] = None,
+                          hidden_apps: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """Get aggregated time per project for a date."""
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -147,23 +198,176 @@ class Database:
         start_str = start.strftime('%Y-%m-%d %H:%M:%S')
         end_str = end.strftime('%Y-%m-%d %H:%M:%S')
 
-        cursor.execute('''
+        # Build query with optional category filtering
+        query = '''
             SELECT
+                COALESCE(project_name, 'Uncategorized') as project_name,
+                category,
+                SUM(CASE WHEN is_active THEN duration_seconds ELSE 0 END) as active_seconds,
+                SUM(duration_seconds) as total_seconds,
+                COUNT(*) as activity_count
+            FROM activities
+            WHERE timestamp >= ? AND timestamp < ?
+        '''
+        params = [start_str, end_str]
+
+        if hidden_categories:
+            placeholders = ','.join('?' * len(hidden_categories))
+            query += f' AND (category IS NULL OR category NOT IN ({placeholders}))'
+            params.extend(hidden_categories)
+
+        query += '''
+            GROUP BY COALESCE(project_name, 'Uncategorized')
+            ORDER BY active_seconds DESC
+        '''
+
+        cursor.execute(query, params)
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Filter out hidden apps (case-insensitive partial match)
+        results = [dict(row) for row in rows]
+        if hidden_apps:
+            results = [r for r in results if not self._is_app_hidden(r['project_name'], hidden_apps)]
+
+        return results
+
+    def get_daily_summary_by_category(self, date: datetime,
+                                       hidden_categories: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Get aggregated time per category for a date."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+
+        start_str = start.strftime('%Y-%m-%d %H:%M:%S')
+        end_str = end.strftime('%Y-%m-%d %H:%M:%S')
+
+        query = '''
+            SELECT
+                COALESCE(category, 'Other') as category,
+                SUM(CASE WHEN is_active THEN duration_seconds ELSE 0 END) as active_seconds,
+                SUM(duration_seconds) as total_seconds,
+                COUNT(*) as activity_count
+            FROM activities
+            WHERE timestamp >= ? AND timestamp < ?
+        '''
+        params = [start_str, end_str]
+
+        if hidden_categories:
+            placeholders = ','.join('?' * len(hidden_categories))
+            query += f' AND (category IS NULL OR category NOT IN ({placeholders}))'
+            params.extend(hidden_categories)
+
+        query += '''
+            GROUP BY COALESCE(category, 'Other')
+            ORDER BY active_seconds DESC
+        '''
+
+        cursor.execute(query, params)
+
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_daily_summary_by_category_with_activities(self, date: datetime,
+                                                       hidden_categories: Optional[List[str]] = None,
+                                                       hidden_apps: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
+        """
+        Get aggregated time per category with nested activities for a date.
+
+        Returns a dict structure:
+        {
+            "Browser": {
+                "active_seconds": 8100,
+                "total_seconds": 9000,
+                "activity_count": 150,
+                "activities": [
+                    {"project_name": "Browser: Claude Code", "active_seconds": 2880},
+                    {"project_name": "Browser: GitHub", "active_seconds": 2100},
+                    ...
+                ]
+            },
+            ...
+        }
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+
+        start_str = start.strftime('%Y-%m-%d %H:%M:%S')
+        end_str = end.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Query groups by both category AND project_name
+        query = '''
+            SELECT
+                COALESCE(category, 'Other') as category,
                 COALESCE(project_name, 'Uncategorized') as project_name,
                 SUM(CASE WHEN is_active THEN duration_seconds ELSE 0 END) as active_seconds,
                 SUM(duration_seconds) as total_seconds,
                 COUNT(*) as activity_count
             FROM activities
             WHERE timestamp >= ? AND timestamp < ?
-            GROUP BY COALESCE(project_name, 'Uncategorized')
-            ORDER BY active_seconds DESC
-        ''', (start_str, end_str))
+        '''
+        params = [start_str, end_str]
 
+        if hidden_categories:
+            placeholders = ','.join('?' * len(hidden_categories))
+            query += f' AND (category IS NULL OR category NOT IN ({placeholders}))'
+            params.extend(hidden_categories)
+
+        query += '''
+            GROUP BY COALESCE(category, 'Other'), COALESCE(project_name, 'Uncategorized')
+            ORDER BY category, active_seconds DESC
+        '''
+
+        cursor.execute(query, params)
         rows = cursor.fetchall()
         conn.close()
-        return [dict(row) for row in rows]
 
-    def get_weekly_summary(self, start_date: datetime) -> List[Dict[str, Any]]:
+        # Filter out hidden apps
+        filtered_rows = [dict(row) for row in rows]
+        if hidden_apps:
+            filtered_rows = [r for r in filtered_rows if not self._is_app_hidden(r['project_name'], hidden_apps)]
+
+        # Build nested structure
+        result: Dict[str, Dict[str, Any]] = {}
+        for row in filtered_rows:
+            category = row['category']
+            if category not in result:
+                result[category] = {
+                    'active_seconds': 0,
+                    'total_seconds': 0,
+                    'activity_count': 0,
+                    'activities': []
+                }
+
+            result[category]['active_seconds'] += row['active_seconds']
+            result[category]['total_seconds'] += row['total_seconds']
+            result[category]['activity_count'] += row['activity_count']
+            result[category]['activities'].append({
+                'project_name': row['project_name'],
+                'active_seconds': row['active_seconds'],
+                'total_seconds': row['total_seconds'],
+                'activity_count': row['activity_count']
+            })
+
+        # Sort categories by total active_seconds descending
+        sorted_result = dict(sorted(
+            result.items(),
+            key=lambda x: x[1]['active_seconds'],
+            reverse=True
+        ))
+
+        return sorted_result
+
+    def get_weekly_summary(self, start_date: datetime,
+                           hidden_categories: Optional[List[str]] = None,
+                           hidden_apps: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """Get aggregated time per project for a week."""
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -175,20 +379,37 @@ class Database:
         start_str = start.strftime('%Y-%m-%d %H:%M:%S')
         end_str = end.strftime('%Y-%m-%d %H:%M:%S')
 
-        cursor.execute('''
+        query = '''
             SELECT
                 COALESCE(project_name, 'Uncategorized') as project_name,
                 DATE(timestamp) as date,
                 SUM(CASE WHEN is_active THEN duration_seconds ELSE 0 END) as active_seconds
             FROM activities
             WHERE timestamp >= ? AND timestamp < ?
+        '''
+        params = [start_str, end_str]
+
+        if hidden_categories:
+            placeholders = ','.join('?' * len(hidden_categories))
+            query += f' AND (category IS NULL OR category NOT IN ({placeholders}))'
+            params.extend(hidden_categories)
+
+        query += '''
             GROUP BY COALESCE(project_name, 'Uncategorized'), DATE(timestamp)
             ORDER BY date, active_seconds DESC
-        ''', (start_str, end_str))
+        '''
+
+        cursor.execute(query, params)
 
         rows = cursor.fetchall()
         conn.close()
-        return [dict(row) for row in rows]
+
+        # Filter out hidden apps
+        results = [dict(row) for row in rows]
+        if hidden_apps:
+            results = [r for r in results if not self._is_app_hidden(r['project_name'], hidden_apps)]
+
+        return results
 
     def update_activity_project(self, activity_id: int, project_name: str):
         """Update the project for an activity (for manual tagging)."""
@@ -364,6 +585,196 @@ class Database:
 
         conn.commit()
         conn.close()
+
+    # Project Tags operations
+    def add_project_tag(self, name: str, keywords: List[str],
+                        color: str = '#4A90D9', enabled: bool = True) -> int:
+        """Add a new project tag."""
+        import json
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        keywords_json = json.dumps(keywords)
+
+        cursor.execute('''
+            INSERT INTO project_tags (name, keywords, color, enabled)
+            VALUES (?, ?, ?, ?)
+        ''', (name, keywords_json, color, enabled))
+
+        tag_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return tag_id
+
+    def get_project_tags(self, enabled_only: bool = False) -> List[Dict[str, Any]]:
+        """Get all project tags."""
+        import json
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        if enabled_only:
+            cursor.execute('''
+                SELECT * FROM project_tags
+                WHERE enabled = 1
+                ORDER BY name ASC
+            ''')
+        else:
+            cursor.execute('SELECT * FROM project_tags ORDER BY name ASC')
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        tags = []
+        for row in rows:
+            tag = dict(row)
+            tag['keywords'] = json.loads(tag['keywords'])
+            tags.append(tag)
+
+        return tags
+
+    def update_project_tag(self, tag_id: int, **kwargs):
+        """Update a project tag."""
+        import json
+
+        if not kwargs:
+            return
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        # Build update query dynamically
+        valid_fields = ['name', 'keywords', 'color', 'enabled']
+        updates = []
+        values = []
+
+        for field, value in kwargs.items():
+            if field in valid_fields:
+                if field == 'keywords' and isinstance(value, list):
+                    value = json.dumps(value)
+                updates.append(f'{field} = ?')
+                values.append(value)
+
+        if updates:
+            values.append(tag_id)
+            query = f"UPDATE project_tags SET {', '.join(updates)} WHERE id = ?"
+            cursor.execute(query, values)
+            conn.commit()
+
+        conn.close()
+
+    def delete_project_tag(self, tag_id: int):
+        """Delete a project tag."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('DELETE FROM project_tags WHERE id = ?', (tag_id,))
+
+        conn.commit()
+        conn.close()
+
+    def get_daily_summary_by_project_tag(self, date: datetime,
+                                          hidden_categories: Optional[List[str]] = None,
+                                          hidden_apps: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
+        """
+        Get activities grouped by project_tag with nested activities for a date.
+
+        Only returns activities that have a project_tag assigned.
+        Untagged activities (Spotify, browsing, etc.) are excluded from this view.
+
+        Returns a dict structure:
+        {
+            "SiiNewUmbraco": {
+                "active_seconds": 5400,
+                "total_seconds": 6000,
+                "activity_count": 100,
+                "color": "#4A90D9",
+                "activities": [
+                    {"project_name": "Visual Studio - SiiNew...", "active_seconds": 2700},
+                    ...
+                ]
+            },
+            ...
+        }
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=1)
+
+        start_str = start.strftime('%Y-%m-%d %H:%M:%S')
+        end_str = end.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Query groups by both project_tag AND project_name
+        # Only include activities that have a project_tag (no "Other" bucket)
+        query = '''
+            SELECT
+                project_tag,
+                COALESCE(project_name, 'Uncategorized') as project_name,
+                SUM(CASE WHEN is_active THEN duration_seconds ELSE 0 END) as active_seconds,
+                SUM(duration_seconds) as total_seconds,
+                COUNT(*) as activity_count
+            FROM activities
+            WHERE timestamp >= ? AND timestamp < ?
+            AND project_tag IS NOT NULL
+        '''
+        params = [start_str, end_str]
+
+        if hidden_categories:
+            placeholders = ','.join('?' * len(hidden_categories))
+            query += f' AND (category IS NULL OR category NOT IN ({placeholders}))'
+            params.extend(hidden_categories)
+
+        query += '''
+            GROUP BY project_tag, COALESCE(project_name, 'Uncategorized')
+            ORDER BY project_tag, active_seconds DESC
+        '''
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Filter out hidden apps
+        filtered_rows = [dict(row) for row in rows]
+        if hidden_apps:
+            filtered_rows = [r for r in filtered_rows if not self._is_app_hidden(r['project_name'], hidden_apps)]
+
+        # Get project tag colors
+        tag_colors = {tag['name']: tag['color'] for tag in self.get_project_tags()}
+
+        # Build nested structure
+        result: Dict[str, Dict[str, Any]] = {}
+        for row in filtered_rows:
+            tag = row['project_tag'] or None  # Use None for untagged
+            if tag not in result:
+                result[tag] = {
+                    'active_seconds': 0,
+                    'total_seconds': 0,
+                    'activity_count': 0,
+                    'color': tag_colors.get(tag, '#888888') if tag else '#888888',
+                    'activities': []
+                }
+
+            result[tag]['active_seconds'] += row['active_seconds']
+            result[tag]['total_seconds'] += row['total_seconds']
+            result[tag]['activity_count'] += row['activity_count']
+            result[tag]['activities'].append({
+                'project_name': row['project_name'],
+                'active_seconds': row['active_seconds'],
+                'total_seconds': row['total_seconds'],
+                'activity_count': row['activity_count']
+            })
+
+        # Sort by total active_seconds descending
+        sorted_result = dict(sorted(
+            result.items(),
+            key=lambda x: x[1]['active_seconds'],
+            reverse=True
+        ))
+
+        return sorted_result
 
     def seed_default_mappings(self):
         """Add default app mappings if none exist."""

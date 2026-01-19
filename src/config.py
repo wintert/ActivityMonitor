@@ -4,7 +4,7 @@ Manages application settings with defaults and persistence.
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Optional, List
 import json
 
 
@@ -42,6 +42,26 @@ class Config:
     # Project detection
     visual_studio_solution_detection: bool = True
     default_project: str = "Uncategorized"
+    auto_create_project_tags: bool = True  # Automatically create tags for new VS/VSCode projects
+
+    # Hidden categories (not shown in reports by default)
+    # Available: Development, Browser, Communication, Remote Desktop, Office,
+    #            Email, Terminal, Editor, Media, System, Security, Other
+    hidden_categories: List[str] = field(default_factory=lambda: ["System"])
+
+    # Hidden apps (specific apps to hide from reports/timeline)
+    # Uses case-insensitive partial matching against activity names
+    # Examples: ["spotify", "apple music", "vlc", "discord"]
+    hidden_apps: List[str] = field(default_factory=list)
+
+    # Claude Code tracking (WSL)
+    claude_code_tracking_enabled: bool = True
+    wsl_username: str = "talwinter"
+    wsl_distro: str = "Ubuntu"
+    claude_code_stale_threshold_seconds: int = 60  # Consider inactive if no update for this long
+
+    # Teams meeting tracking
+    teams_background_tracking_enabled: bool = True  # Track Teams meetings when not focused
 
     # Data retention
     keep_data_days: int = 90

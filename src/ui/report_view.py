@@ -47,19 +47,34 @@ class ReportView:
     Report view showing daily and weekly summaries.
 
     Features:
-    - Daily summary with project breakdown
+    - Daily summary with activity/category breakdown
     - Weekly summary with daily totals
     - CSV export functionality
+    - Hidden categories filtering (e.g., System/Explorer hidden by default)
     """
 
-    def __init__(self, database, parent: Optional[tk.Tk] = None):
+    def __init__(self, database, parent: Optional[tk.Tk] = None, config_manager=None):
         self.db = database
         self.parent = parent
+        self.config_manager = config_manager
         self.window: Optional[tk.Toplevel] = None
         self._selected_date = datetime.now()
         self._view_mode = 'daily'  # 'daily' or 'weekly'
+        self._group_by = 'activity'  # 'activity', 'category', or 'project'
         self._color_map: Dict[str, str] = {}
         self._color_index = 0
+
+    def _get_hidden_categories(self) -> List[str]:
+        """Get list of categories to hide from reports."""
+        if self.config_manager:
+            return self.config_manager.config.hidden_categories
+        return ["System"]  # Default: hide System (File Explorer, etc.)
+
+    def _get_hidden_apps(self) -> List[str]:
+        """Get list of app patterns to hide from reports."""
+        if self.config_manager:
+            return self.config_manager.config.hidden_apps
+        return []
 
     def _get_project_color(self, project_name: str) -> str:
         """Get a consistent color for a project."""
@@ -127,7 +142,7 @@ class ReportView:
         header = ttk.Frame(parent)
         header.pack(fill=tk.X, pady=(0, 10))
 
-        # View mode toggle
+        # View mode toggle (Daily/Weekly)
         mode_frame = ttk.Frame(header)
         mode_frame.pack(side=tk.LEFT)
 
@@ -142,6 +157,46 @@ class ReportView:
             command=lambda: self._set_view_mode('weekly')
         )
         self._weekly_btn.pack(side=tk.LEFT)
+
+        # Separator
+        ttk.Separator(mode_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
+
+        # Group by toggle (Activity/Category)
+        self._activity_btn = ttk.Button(
+            mode_frame, text="By Activity",
+            command=lambda: self._set_group_by('activity')
+        )
+        self._activity_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        self._category_btn = ttk.Button(
+            mode_frame, text="By Category",
+            command=lambda: self._set_group_by('category')
+        )
+        self._category_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        self._project_btn = ttk.Button(
+            mode_frame, text="By Project",
+            command=lambda: self._set_group_by('project')
+        )
+        self._project_btn.pack(side=tk.LEFT)
+
+        # Separator before expand/collapse buttons
+        ttk.Separator(mode_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
+
+        # Expand/Collapse buttons (for category view)
+        self._expand_btn = ttk.Button(
+            mode_frame, text="+",
+            command=self._expand_all,
+            width=3
+        )
+        self._expand_btn.pack(side=tk.LEFT, padx=(0, 2))
+
+        self._collapse_btn = ttk.Button(
+            mode_frame, text="-",
+            command=self._collapse_all,
+            width=3
+        )
+        self._collapse_btn.pack(side=tk.LEFT)
 
         # Navigation buttons
         nav_frame = ttk.Frame(header)
@@ -198,20 +253,24 @@ class ReportView:
             self._create_charts(charts_frame)
 
     def _create_table(self, parent):
-        """Create the project breakdown table."""
+        """Create the activity/category breakdown table."""
         columns = ('project', 'time', 'percentage')
         self._report_tree = ttk.Treeview(
             parent,
             columns=columns,
-            show='headings',
+            show='tree headings',  # Enable tree column for expand/collapse
             height=12
         )
 
-        self._report_tree.heading('project', text='Project')
+        # Configure tree column (for expand/collapse indicators)
+        self._report_tree.heading('#0', text='')
+        self._report_tree.column('#0', width=30, minwidth=30, stretch=False)
+
+        self._report_tree.heading('project', text='Activity')
         self._report_tree.heading('time', text='Time')
         self._report_tree.heading('percentage', text='%')
 
-        self._report_tree.column('project', width=300, minwidth=150)
+        self._report_tree.column('project', width=270, minwidth=150)
         self._report_tree.column('time', width=120, minwidth=80, anchor='center')
         self._report_tree.column('percentage', width=80, minwidth=60, anchor='center')
 
@@ -261,8 +320,8 @@ class ReportView:
         seconds = [item.get('active_seconds', 0) for item in data[:6]]
         colors = [self._get_project_color(p) for p in projects]
 
-        # Truncate long project names
-        display_names = [p[:20] + '...' if len(p) > 20 else p for p in projects]
+        # Use full project names
+        display_names = projects
 
         # Draw pie chart
         if sum(seconds) > 0:
@@ -283,7 +342,13 @@ class ReportView:
                 frameon=False,
                 labelcolor='white'
             )
-            self._pie_ax.set_title('Time Distribution', color='white', fontsize=12, fontweight='bold', pad=10)
+            if self._group_by == 'category':
+                chart_title = 'Time by Category'
+            elif self._group_by == 'project':
+                chart_title = 'Time by Project'
+            else:
+                chart_title = 'Time by Activity'
+            self._pie_ax.set_title(chart_title, color='white', fontsize=12, fontweight='bold', pad=10)
         else:
             self._pie_ax.text(0.5, 0.5, 'No activity', ha='center', va='center', color='white', fontsize=14)
 
@@ -295,7 +360,13 @@ class ReportView:
             self._bar_ax.set_yticks(y_pos)
             self._bar_ax.set_yticklabels(display_names, fontsize=10, color='white')
             self._bar_ax.set_xlabel('Hours', color='white', fontsize=11)
-            self._bar_ax.set_title('Hours by Project', color='white', fontsize=12, fontweight='bold', pad=10)
+            if self._group_by == 'category':
+                bar_title = 'Hours by Category'
+            elif self._group_by == 'project':
+                bar_title = 'Hours by Project'
+            else:
+                bar_title = 'Hours by Activity'
+            self._bar_ax.set_title(bar_title, color='white', fontsize=12, fontweight='bold', pad=10)
             self._bar_ax.tick_params(axis='x', colors='white', labelsize=10)
             self._bar_ax.tick_params(axis='y', colors='white')
             self._bar_ax.invert_yaxis()  # Top project at top
@@ -342,15 +413,50 @@ class ReportView:
         self._view_mode = mode
         self._refresh()
 
+    def _set_group_by(self, group_by: str):
+        """Set the grouping mode (activity or category)."""
+        self._group_by = group_by
+        self._refresh()
+
     def _refresh(self):
         """Refresh the report display."""
         if self.window is None:
             return
 
+        hidden_categories = self._get_hidden_categories()
+        hidden_apps = self._get_hidden_apps()
+
         # Update date label
         if self._view_mode == 'daily':
             self._date_label.config(text=self._selected_date.strftime("%A, %B %d, %Y"))
-            data = self.db.get_daily_summary(self._selected_date)
+            if self._group_by == 'category':
+                # Get hierarchical data for category view
+                category_data = self.db.get_daily_summary_by_category_with_activities(
+                    self._selected_date, hidden_categories, hidden_apps
+                )
+                # Also get flat data for charts (category totals)
+                data = [
+                    {'project_name': cat, 'active_seconds': info['active_seconds'],
+                     'total_seconds': info['total_seconds']}
+                    for cat, info in category_data.items()
+                ]
+                project_data = None
+            elif self._group_by == 'project':
+                # Get hierarchical data for project tag view
+                project_data = self.db.get_daily_summary_by_project_tag(
+                    self._selected_date, hidden_categories, hidden_apps
+                )
+                # Also get flat data for charts (project totals)
+                data = [
+                    {'project_name': tag or 'Other', 'active_seconds': info['active_seconds'],
+                     'total_seconds': info['total_seconds']}
+                    for tag, info in project_data.items()
+                ]
+                category_data = None
+            else:
+                data = self.db.get_daily_summary(self._selected_date, hidden_categories, hidden_apps)
+                category_data = None
+                project_data = None
         else:
             # Weekly view - start from Monday
             start = self._selected_date - timedelta(days=self._selected_date.weekday())
@@ -358,7 +464,9 @@ class ReportView:
             self._date_label.config(
                 text=f"{start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}"
             )
-            data = self._get_weekly_data(start)
+            data = self._get_weekly_data(start, hidden_categories, hidden_apps)
+            category_data = None
+            project_data = None
 
         # Update totals (active and idle)
         total_active = sum(item.get('active_seconds', 0) for item in data)
@@ -368,29 +476,142 @@ class ReportView:
         self._total_label.config(text=f"Total Active Time: {self._format_duration(total_active)}")
         self._idle_label.config(text=f"Idle Time: {self._format_duration(total_idle)}")
 
+        # Update table header based on grouping mode
+        if self._group_by == 'category':
+            header_text = 'Category'
+        elif self._group_by == 'project':
+            header_text = 'Project'
+        else:
+            header_text = 'Activity'
+        self._report_tree.heading('project', text=header_text)
+
         # Update table
         for item in self._report_tree.get_children():
             self._report_tree.delete(item)
 
-        for item in data:
-            project = item['project_name']
-            seconds = item.get('active_seconds', 0)
-            time_str = self._format_duration(seconds)
-            pct = (seconds / total_active * 100) if total_active > 0 else 0
+        if self._group_by == 'category' and category_data:
+            # Hierarchical display for category mode
+            self._populate_category_tree(category_data, total_active)
+        elif self._group_by == 'project' and project_data:
+            # Hierarchical display for project tag mode
+            self._populate_project_tree(project_data, total_active)
+        else:
+            # Flat display for activity mode
+            for item in data:
+                project = item['project_name']
+                seconds = item.get('active_seconds', 0)
+                time_str = self._format_duration(seconds)
+                pct = (seconds / total_active * 100) if total_active > 0 else 0
 
-            self._report_tree.insert(
-                '', tk.END,
-                values=(project, time_str, f"{pct:.1f}%")
-            )
+                self._report_tree.insert(
+                    '', tk.END,
+                    values=(project, time_str, f"{pct:.1f}%")
+                )
 
         # Update charts
         if MATPLOTLIB_AVAILABLE:
             self._update_charts(data)
 
-    def _get_weekly_data(self, start_date: datetime) -> List[Dict]:
+    def _populate_category_tree(self, category_data: dict, total_active: int):
+        """Populate the tree with hierarchical category data."""
+        for category, info in category_data.items():
+            cat_seconds = info['active_seconds']
+            cat_time = self._format_duration(cat_seconds)
+            cat_pct = (cat_seconds / total_active * 100) if total_active > 0 else 0
+
+            # Insert category as parent node (with expand/collapse)
+            cat_id = self._report_tree.insert(
+                '', tk.END,
+                text='',  # Tree column text (empty, using expand arrow only)
+                values=(category, cat_time, f"{cat_pct:.1f}%"),
+                open=False,  # Collapsed by default
+                tags=('category',)
+            )
+
+            # Insert activities as children
+            for activity in info['activities']:
+                act_seconds = activity['active_seconds']
+                act_time = self._format_duration(act_seconds)
+                act_pct = (act_seconds / total_active * 100) if total_active > 0 else 0
+
+                # Extract just the activity name (remove category prefix if present)
+                act_name = activity['project_name']
+                # Show with indent indicator
+                display_name = f"  {act_name}"
+
+                self._report_tree.insert(
+                    cat_id, tk.END,
+                    text='',
+                    values=(display_name, act_time, f"{act_pct:.1f}%"),
+                    tags=('activity',)
+                )
+
+        # Apply bold styling to category rows if supported
+        try:
+            self._report_tree.tag_configure('category', font=('Segoe UI', 10, 'bold'))
+            self._report_tree.tag_configure('activity', font=('Segoe UI', 9))
+        except Exception:
+            pass  # Skip if styling not supported
+
+    def _populate_project_tree(self, project_data: dict, total_active: int):
+        """Populate the tree with hierarchical project tag data."""
+        for tag, info in project_data.items():
+            tag_seconds = info['active_seconds']
+            tag_time = self._format_duration(tag_seconds)
+            tag_pct = (tag_seconds / total_active * 100) if total_active > 0 else 0
+
+            # Display name for the tag (None becomes "Other")
+            display_tag = tag if tag else "Other"
+
+            # Insert project tag as parent node (with expand/collapse)
+            tag_id = self._report_tree.insert(
+                '', tk.END,
+                text='',  # Tree column text (empty, using expand arrow only)
+                values=(display_tag, tag_time, f"{tag_pct:.1f}%"),
+                open=False,  # Collapsed by default
+                tags=('project_tag',)
+            )
+
+            # Insert activities as children
+            for activity in info['activities']:
+                act_seconds = activity['active_seconds']
+                act_time = self._format_duration(act_seconds)
+                act_pct = (act_seconds / total_active * 100) if total_active > 0 else 0
+
+                # Show with indent indicator
+                act_name = activity['project_name']
+                display_name = f"  {act_name}"
+
+                self._report_tree.insert(
+                    tag_id, tk.END,
+                    text='',
+                    values=(display_name, act_time, f"{act_pct:.1f}%"),
+                    tags=('activity',)
+                )
+
+        # Apply bold styling to project tag rows if supported
+        try:
+            self._report_tree.tag_configure('project_tag', font=('Segoe UI', 10, 'bold'))
+            self._report_tree.tag_configure('activity', font=('Segoe UI', 9))
+        except Exception:
+            pass  # Skip if styling not supported
+
+    def _expand_all(self):
+        """Expand all parent nodes in the tree."""
+        for item in self._report_tree.get_children():
+            self._report_tree.item(item, open=True)
+
+    def _collapse_all(self):
+        """Collapse all parent nodes in the tree."""
+        for item in self._report_tree.get_children():
+            self._report_tree.item(item, open=False)
+
+    def _get_weekly_data(self, start_date: datetime,
+                         hidden_categories: List[str] = None,
+                         hidden_apps: List[str] = None) -> List[Dict]:
         """Get aggregated weekly data."""
         # Get raw weekly data
-        raw_data = self.db.get_weekly_summary(start_date)
+        raw_data = self.db.get_weekly_summary(start_date, hidden_categories, hidden_apps)
 
         # Aggregate by project
         project_totals = {}

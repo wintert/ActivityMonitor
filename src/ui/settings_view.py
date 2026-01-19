@@ -92,27 +92,69 @@ class SettingsView:
                 self.window = tk.Toplevel()
 
         self.window.title("ActivityMonitor - Settings")
-        self.window.geometry("520x750")
+        self.window.geometry("550x700")
         self.window.resizable(True, True)
 
         # Handle window close button (X)
         self.window.protocol("WM_DELETE_WINDOW", self.close)
 
-        # Main container with scrollbar
-        main_frame = ttk.Frame(self.window)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+        # Create outer frame for canvas and scrollbar
+        outer_frame = ttk.Frame(self.window)
+        outer_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Create canvas with scrollbar
+        canvas = tk.Canvas(outer_frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer_frame, orient=tk.VERTICAL, command=canvas.yview)
+
+        # Create scrollable frame inside canvas
+        main_frame = ttk.Frame(canvas)
+
+        # Configure canvas scrolling
+        main_frame.bind(
+            '<Configure>',
+            lambda e: canvas.configure(scrollregion=canvas.bbox('all'))
+        )
+
+        canvas_frame = canvas.create_window((0, 0), window=main_frame, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Make frame expand to canvas width
+        def _configure_canvas_width(event):
+            canvas.itemconfig(canvas_frame, width=event.width)
+
+        canvas.bind('<Configure>', _configure_canvas_width)
+
+        # Pack canvas and scrollbar
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(15, 0), pady=15)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=15, padx=(0, 5))
+
+        # Bind mousewheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+
+        canvas.bind_all('<MouseWheel>', _on_mousewheel)
+
+        # Store canvas reference for cleanup
+        self._canvas = canvas
 
         # Create sections
         self._create_idle_section(main_frame)
         self._create_camera_section(main_frame)
         self._create_tracking_section(main_frame)
+        self._create_hidden_apps_section(main_frame)
+        self._create_claude_code_section(main_frame)
         self._create_theme_section(main_frame)
         self._create_break_reminder_section(main_frame)
         self._create_daily_summary_section(main_frame)
         self._create_startup_section(main_frame)
 
-        # Buttons
-        self._create_buttons(main_frame)
+        # Project Tags section
+        self._create_project_tags_section(main_frame)
+
+        # Buttons (in a separate frame at bottom, outside scrollable area)
+        button_frame = ttk.Frame(self.window)
+        button_frame.pack(fill=tk.X, padx=15, pady=(0, 15))
+        self._create_buttons_in_frame(button_frame)
 
     def _create_idle_section(self, parent):
         """Create idle detection settings section."""
@@ -301,6 +343,122 @@ class SettingsView:
             variable=self._vars['vs_detection']
         ).pack(anchor='w', pady=(10, 0))
 
+    def _create_hidden_apps_section(self, parent):
+        """Create hidden apps settings section."""
+        frame = ttk.LabelFrame(parent, text="Hidden Apps")
+        frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(
+            frame,
+            text="Apps to hide from reports and timeline (comma-separated):",
+            font=('Segoe UI', 9)
+        ).pack(anchor='w', pady=(0, 5))
+
+        # Text entry for hidden apps
+        self._vars['hidden_apps'] = tk.StringVar()
+        hidden_entry = ttk.Entry(
+            frame,
+            textvariable=self._vars['hidden_apps'],
+            width=50
+        )
+        hidden_entry.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Label(
+            frame,
+            text="Examples: spotify, apple music, vlc, discord\n"
+                 "Uses case-insensitive partial matching against activity names.",
+            font=('Segoe UI', 8),
+            foreground='#888'
+        ).pack(anchor='w')
+
+    def _create_claude_code_section(self, parent):
+        """Create Claude Code tracking settings section."""
+        frame = ttk.LabelFrame(parent, text="Claude Code Tracking (WSL)")
+        frame.pack(fill=tk.X, pady=(0, 10))
+
+        # Enable Claude Code tracking
+        self._vars['claude_code_enabled'] = tk.BooleanVar()
+        ttk.Checkbutton(
+            frame,
+            text="Track Claude Code background activity",
+            variable=self._vars['claude_code_enabled'],
+            command=self._toggle_claude_code_options
+        ).pack(anchor='w')
+
+        ttk.Label(
+            frame,
+            text="Track time spent with Claude Code even when terminal is in background.",
+            font=('Segoe UI', 8),
+            foreground='#666'
+        ).pack(anchor='w', pady=(0, 10))
+
+        # Claude Code options (sub-frame)
+        self._claude_options_frame = ttk.Frame(frame)
+        self._claude_options_frame.pack(fill=tk.X)
+
+        # WSL Username
+        row1 = ttk.Frame(self._claude_options_frame)
+        row1.pack(fill=tk.X, pady=2)
+
+        ttk.Label(row1, text="WSL Username:", width=20, anchor='w').pack(side=tk.LEFT)
+
+        self._vars['wsl_username'] = tk.StringVar()
+        ttk.Entry(
+            row1,
+            textvariable=self._vars['wsl_username'],
+            width=20
+        ).pack(side=tk.LEFT, padx=(5, 0))
+
+        # WSL Distro
+        row2 = ttk.Frame(self._claude_options_frame)
+        row2.pack(fill=tk.X, pady=2)
+
+        ttk.Label(row2, text="WSL Distribution:", width=20, anchor='w').pack(side=tk.LEFT)
+
+        self._vars['wsl_distro'] = tk.StringVar()
+        distro_combo = ttk.Combobox(
+            row2,
+            textvariable=self._vars['wsl_distro'],
+            values=['Ubuntu', 'Ubuntu-20.04', 'Ubuntu-22.04', 'Debian', 'openSUSE-Leap-15.5'],
+            width=18
+        )
+        distro_combo.pack(side=tk.LEFT, padx=(5, 0))
+
+        # Stale threshold
+        row3 = ttk.Frame(self._claude_options_frame)
+        row3.pack(fill=tk.X, pady=2)
+
+        ttk.Label(row3, text="Stale threshold:", width=20, anchor='w').pack(side=tk.LEFT)
+
+        self._vars['claude_stale_threshold'] = tk.StringVar()
+        threshold_combo = ttk.Combobox(
+            row3,
+            textvariable=self._vars['claude_stale_threshold'],
+            values=['30 seconds', '60 seconds', '120 seconds'],
+            state='readonly',
+            width=18
+        )
+        threshold_combo.pack(side=tk.LEFT, padx=(5, 0))
+
+        ttk.Label(
+            self._claude_options_frame,
+            text="Consider Claude inactive if no activity for this long.\n"
+                 "Requires Claude Code hooks to be configured in WSL.",
+            font=('Segoe UI', 8),
+            foreground='#888'
+        ).pack(anchor='w', pady=(5, 0))
+
+    def _toggle_claude_code_options(self):
+        """Enable/disable Claude Code options based on checkbox."""
+        enabled = self._vars['claude_code_enabled'].get()
+
+        for child in self._claude_options_frame.winfo_children():
+            for widget in child.winfo_children():
+                if isinstance(widget, ttk.Entry):
+                    widget.configure(state='normal' if enabled else 'disabled')
+                elif isinstance(widget, ttk.Combobox):
+                    widget.configure(state='normal' if enabled else 'disabled')
+
     def _create_theme_section(self, parent):
         """Create theme settings section."""
         frame = ttk.LabelFrame(parent, text="Appearance")
@@ -428,11 +586,47 @@ class SettingsView:
             variable=self._vars['show_notifications']
         ).pack(anchor='w')
 
-    def _create_buttons(self, parent):
-        """Create action buttons."""
-        button_frame = ttk.Frame(parent)
-        button_frame.pack(fill=tk.X, pady=(10, 0))
+    def _create_project_tags_section(self, parent):
+        """Create project tags management section."""
+        frame = ttk.LabelFrame(parent, text="Project Tags")
+        frame.pack(fill=tk.X, pady=(0, 10))
 
+        ttk.Label(
+            frame,
+            text="Project tags group activities from different tools (VS, Terminal, Claude Code) "
+                 "under a single project name.",
+            font=('Segoe UI', 9),
+            wraplength=450
+        ).pack(anchor='w', pady=(0, 10))
+
+        ttk.Button(
+            frame,
+            text="Manage Project Tags...",
+            command=self._show_project_tags
+        ).pack(anchor='w')
+
+    def _show_project_tags(self):
+        """Open the Project Tags management window."""
+        from ui.project_tags_view import ProjectTagsView
+
+        # Get the database from config_manager
+        db = self.config_manager.db
+
+        # Create and show the view
+        tags_view = ProjectTagsView(
+            db,
+            self.window,
+            on_change=self._on_project_tags_changed
+        )
+        tags_view.show()
+
+    def _on_project_tags_changed(self):
+        """Handle project tags being changed."""
+        logger.info("Project tags changed")
+        # The activity monitor will reload tags when needed
+
+    def _create_buttons_in_frame(self, button_frame):
+        """Create action buttons in the provided frame."""
         ttk.Button(
             button_frame,
             text="Reset to Defaults",
@@ -487,6 +681,20 @@ class SettingsView:
 
         self._vars['vs_detection'].set(config.visual_studio_solution_detection)
 
+        # Hidden apps (convert list to comma-separated string)
+        hidden_apps_str = ', '.join(config.hidden_apps) if config.hidden_apps else ''
+        self._vars['hidden_apps'].set(hidden_apps_str)
+
+        # Claude Code settings
+        self._vars['claude_code_enabled'].set(config.claude_code_tracking_enabled)
+        self._vars['wsl_username'].set(config.wsl_username)
+        self._vars['wsl_distro'].set(config.wsl_distro)
+        stale_map = {30: '30 seconds', 60: '60 seconds', 120: '120 seconds'}
+        self._vars['claude_stale_threshold'].set(stale_map.get(config.claude_code_stale_threshold_seconds, '60 seconds'))
+
+        # Toggle Claude Code options
+        self._toggle_claude_code_options()
+
         # Theme settings
         self._vars['theme'].set(config.theme)
 
@@ -519,6 +727,11 @@ class SettingsView:
             device_map = {'Camera 0 (Default)': 0, 'Camera 1': 1, 'Camera 2': 2}
             break_map = {'25 minutes': 25, '30 minutes': 30, '45 minutes': 45, '50 minutes': 50, '60 minutes': 60}
             hour_map = {'5 PM': 17, '6 PM': 18, '7 PM': 19, '8 PM': 20, '9 PM': 21}
+            claude_stale_map = {'30 seconds': 30, '60 seconds': 60, '120 seconds': 120}
+
+            # Parse hidden apps (comma-separated string to list)
+            hidden_apps_str = self._vars['hidden_apps'].get().strip()
+            hidden_apps = [app.strip() for app in hidden_apps_str.split(',') if app.strip()]
 
             self.config_manager.update(
                 idle_timeout_minutes=idle_map.get(self._vars['idle_timeout'].get(), 3),
@@ -528,6 +741,11 @@ class SettingsView:
                 camera_device_index=device_map.get(self._vars['camera_device'].get(), 0),
                 polling_interval_seconds=polling_map.get(self._vars['polling_interval'].get(), 5),
                 visual_studio_solution_detection=self._vars['vs_detection'].get(),
+                hidden_apps=hidden_apps,
+                claude_code_tracking_enabled=self._vars['claude_code_enabled'].get(),
+                wsl_username=self._vars['wsl_username'].get(),
+                wsl_distro=self._vars['wsl_distro'].get(),
+                claude_code_stale_threshold_seconds=claude_stale_map.get(self._vars['claude_stale_threshold'].get(), 60),
                 theme=self._vars['theme'].get(),
                 break_reminder_enabled=self._vars['break_reminder_enabled'].get(),
                 break_reminder_interval_minutes=break_map.get(self._vars['break_interval'].get(), 50),
@@ -578,6 +796,11 @@ class SettingsView:
     def close(self):
         """Close the settings window."""
         if self.window:
+            # Unbind mousewheel to prevent errors after window is destroyed
+            try:
+                self._canvas.unbind_all('<MouseWheel>')
+            except Exception:
+                pass
             self.window.destroy()
             self.window = None
 

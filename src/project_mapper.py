@@ -1,14 +1,44 @@
 """
 Project mapper module for ActivityMonitor.
-Maps window activities to projects based on rules.
+Maps window activities to projects based on rules and categories.
 """
 
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# Category constants
+class Category:
+    """Activity categories for grouping similar activities."""
+    DEVELOPMENT = "Development"
+    BROWSER = "Browser"
+    COMMUNICATION = "Communication"
+    REMOTE_DESKTOP = "Remote Desktop"
+    OFFICE = "Office"
+    EMAIL = "Email"
+    TERMINAL = "Terminal"
+    EDITOR = "Editor"
+    MEDIA = "Media"
+    SYSTEM = "System"  # File Explorer, utilities
+    SECURITY = "Security"  # VPN, antivirus, etc.
+    OTHER = "Other"
+
+    # Categories hidden by default in reports
+    DEFAULT_HIDDEN = ["System"]
+
+    @classmethod
+    def all_categories(cls) -> List[str]:
+        """Return all category names."""
+        return [
+            cls.DEVELOPMENT, cls.BROWSER, cls.COMMUNICATION,
+            cls.REMOTE_DESKTOP, cls.OFFICE, cls.EMAIL,
+            cls.TERMINAL, cls.EDITOR, cls.MEDIA,
+            cls.SYSTEM, cls.SECURITY, cls.OTHER
+        ]
 
 
 @dataclass
@@ -156,16 +186,16 @@ class ProjectMapper:
         else:
             return mapped_project
 
-    def map_activity(self, process_name: str, window_title: str) -> Optional[str]:
+    def map_activity(self, process_name: str, window_title: str) -> Tuple[str, str]:
         """
-        Map an activity to a project name.
+        Map an activity to a project name and category.
 
         Args:
             process_name: The process name (e.g., "devenv.exe")
             window_title: The window title
 
         Returns:
-            Project name - ALWAYS returns something meaningful, never None
+            Tuple of (project_name, category) - ALWAYS returns something meaningful
         """
         # First, check Visual Studio (highest priority for solution/project detection)
         # Check by process name OR by window title pattern (for elevated processes)
@@ -173,39 +203,39 @@ class ProjectMapper:
             'microsoft visual studio' in window_title.lower()):
             project = self._detect_visual_studio_project(window_title)
             if project:
-                return project
+                return (project, Category.DEVELOPMENT)
 
         # Also check VS Code for compatibility
         if (process_name in self.VSCODE_PROCESSES or
             'visual studio code' in window_title.lower()):
             project = self._detect_vscode_project(window_title)
             if project:
-                return project
+                return (project, Category.DEVELOPMENT)
 
         # Check custom rules
         for rule in self._custom_rules:
             if self._matches_rule(rule, process_name, window_title):
-                return rule.project_name
+                return (rule.project_name, Category.OTHER)
 
         # Check if it's a known application type
-        app_type = self._detect_app_type(process_name, window_title)
-        if app_type:
-            return app_type
+        result = self._detect_app_type(process_name, window_title)
+        if result:
+            return result
 
         # Fallback: use process name so nothing is truly "uncategorized"
         if process_name and process_name != "Unknown":
             # Clean up process name (remove .exe)
             clean_name = process_name.replace('.exe', '').replace('.EXE', '')
-            return f"App: {clean_name}"
+            return (f"App: {clean_name}", Category.OTHER)
 
         # Last resort: extract something from window title
         if window_title:
             # Take first meaningful part of title
             parts = window_title.split(' - ')
             if parts:
-                return f"Window: {parts[0][:50]}"
+                return (f"Window: {parts[0][:50]}", Category.OTHER)
 
-        return "Unknown"
+        return ("Unknown", Category.OTHER)
 
     def _detect_visual_studio_project(self, window_title: str) -> Optional[str]:
         """Extract solution/project name from Visual Studio window title."""
@@ -302,11 +332,11 @@ class ProjectMapper:
 
         return False
 
-    def _detect_app_type(self, process_name: str, window_title: str) -> Optional[str]:
+    def _detect_app_type(self, process_name: str, window_title: str) -> Optional[Tuple[str, str]]:
         """
         Detect common application types and extract project context.
 
-        Returns a project/category name for known applications.
+        Returns a tuple of (display_name, category) for known applications.
         """
         process_lower = process_name.lower()
         title_lower = window_title.lower()
@@ -320,55 +350,116 @@ class ProjectMapper:
                 # Truncate long titles
                 if len(page_title) > 60:
                     page_title = page_title[:57] + "..."
-                return f"Browser: {page_title}"
-            return "Browser"
+                return (f"Browser: {page_title}", Category.BROWSER)
+            return ("Browser", Category.BROWSER)
+
+        # Communication apps (check before general apps)
+        # Special handling for Teams to extract meeting/chat context
+        if 'teams' in process_lower or 'teams' in title_lower:
+            teams_context = self._extract_teams_context(window_title)
+            return (teams_context, Category.COMMUNICATION)
+
+        comm_apps = {
+            'slack': 'Slack',
+            'zoom': 'Zoom',
+            'discord': 'Discord',
+            'webex': 'Webex',
+            'whatsapp': 'WhatsApp',
+            'telegram': 'Telegram',
+            'signal': 'Signal',
+            'skype': 'Skype',
+        }
+        for app_key, app_name in comm_apps.items():
+            if app_key in process_lower or app_key in title_lower:
+                return (app_name, Category.COMMUNICATION)
+
+        # Remote Desktop apps
+        remote_apps = {
+            'mstsc': 'Remote Desktop',
+            'rdcman': 'RD Connection Manager',
+            'anydesk': 'AnyDesk',
+            'teamviewer': 'TeamViewer',
+            'rustdesk': 'RustDesk',
+            'vmconnect': 'Hyper-V Connect',
+            'vmware': 'VMware',
+            'virtualbox': 'VirtualBox',
+        }
+        for app_key, app_name in remote_apps.items():
+            if app_key in process_lower:
+                # Try to extract connection name from title
+                if window_title and window_title not in ['', app_name]:
+                    conn_name = window_title.split(' - ')[0][:40]
+                    return (f"{app_name}: {conn_name}", Category.REMOTE_DESKTOP)
+                return (app_name, Category.REMOTE_DESKTOP)
+
+        # Security/VPN apps
+        security_apps = {
+            'forticlient': 'FortiClient VPN',
+            'vpn': 'VPN',
+            'openvpn': 'OpenVPN',
+            'wireguard': 'WireGuard',
+            'cisco': 'Cisco VPN',
+            'globalprotect': 'GlobalProtect',
+            'defender': 'Windows Defender',
+            'malwarebytes': 'Malwarebytes',
+        }
+        for app_key, app_name in security_apps.items():
+            if app_key in process_lower or app_key in title_lower:
+                return (app_name, Category.SECURITY)
 
         # Text editors - show filename
         text_editors = ['notepad', 'notepad++', 'sublime', 'atom', 'textpad', 'ultraedit']
         if any(editor in process_lower for editor in text_editors):
             filename = self._extract_editor_filename(window_title, process_name)
             if filename:
-                return f"Editor: {filename}"
-            return f"Editor: {process_name.replace('.exe', '')}"
-
-        # Communication apps
-        if any(app in process_lower for app in ['teams', 'slack', 'zoom', 'discord', 'webex']):
-            return 'Communication'
+                return (f"Editor: {filename}", Category.EDITOR)
+            return (f"Editor: {process_name.replace('.exe', '')}", Category.EDITOR)
 
         # Office apps - show document name
         if 'outlook' in process_lower:
-            return 'Email'
+            return ('Outlook', Category.EMAIL)
         if any(app in process_lower for app in ['winword', 'word']):
             doc_name = self._extract_office_document(window_title, 'Word')
-            return f"Word: {doc_name}" if doc_name else 'Word'
+            return (f"Word: {doc_name}" if doc_name else 'Word', Category.OFFICE)
         if any(app in process_lower for app in ['excel', 'xlim']):
             doc_name = self._extract_office_document(window_title, 'Excel')
-            return f"Excel: {doc_name}" if doc_name else 'Excel'
+            return (f"Excel: {doc_name}" if doc_name else 'Excel', Category.OFFICE)
         if any(app in process_lower for app in ['powerpnt', 'powerpoint']):
             doc_name = self._extract_office_document(window_title, 'PowerPoint')
-            return f"PowerPoint: {doc_name}" if doc_name else 'PowerPoint'
+            return (f"PowerPoint: {doc_name}" if doc_name else 'PowerPoint', Category.OFFICE)
         if 'onenote' in process_lower:
-            return 'OneNote'
+            return ('OneNote', Category.OFFICE)
 
         # Terminal/Console
-        if any(term in process_lower for term in ['windowsterminal', 'cmd', 'powershell', 'conhost']):
-            # Try to extract current directory or command from title
-            return f"Terminal: {window_title[:50]}" if window_title else 'Terminal'
+        if any(term in process_lower for term in ['windowsterminal', 'cmd', 'powershell', 'conhost', 'wsl']):
+            # Try to extract current directory from terminal title
+            if window_title:
+                dir_name = self._extract_terminal_directory(window_title)
+                if dir_name:
+                    return (f"Terminal: {dir_name}", Category.TERMINAL)
+                # Fallback to window title if no directory found
+                return (f"Terminal: {window_title[:50]}", Category.TERMINAL)
+            return ('Terminal', Category.TERMINAL)
 
         # Music/Media
         if 'spotify' in process_lower:
             # Spotify shows "Song - Artist" in title
             if window_title and window_title != 'Spotify':
-                return f"Spotify: {window_title[:50]}"
-            return 'Spotify'
-        if any(app in process_lower for app in ['music', 'vlc', 'media', 'groove']):
-            return 'Media'
+                return (f"Spotify: {window_title[:50]}", Category.MEDIA)
+            return ('Spotify', Category.MEDIA)
+        if any(app in process_lower for app in ['music', 'vlc', 'media', 'groove', 'itunes', 'foobar']):
+            return ('Media Player', Category.MEDIA)
 
-        # File explorer - show folder name or Desktop
+        # File explorer - show folder name or Desktop (categorized as System)
         if 'explorer' in process_lower:
             if not window_title or window_title.lower() in ['program manager', 'desktop', '']:
-                return "Desktop"
-            return f"Explorer: {window_title[:50]}"
+                return ("Desktop", Category.SYSTEM)
+            return (f"Explorer: {window_title[:50]}", Category.SYSTEM)
+
+        # Other system utilities
+        system_apps = ['taskmgr', 'control', 'mmc', 'regedit', 'services', 'perfmon', 'resmon']
+        if any(app in process_lower for app in system_apps):
+            return ('System Tools', Category.SYSTEM)
 
         return None
 
@@ -455,6 +546,171 @@ class ProjectMapper:
 
         return None
 
+    def _extract_terminal_directory(self, window_title: str) -> Optional[str]:
+        """
+        Extract working directory from terminal window title.
+
+        Handles common terminal title formats:
+        - "user@host: ~/Projects/MyApp" → "MyApp"
+        - "user@host:~/Projects/MyApp" → "MyApp"
+        - "MINGW64:/c/Projects/MyApp" → "MyApp"
+        - "/home/user/projects/foo" → "foo"
+        - "/mnt/c/Projects/ActivityMonitor" → "ActivityMonitor"
+        - "~/Projects/MyApp" → "MyApp"
+        - "C:\\Projects\\MyApp" → "MyApp"
+        - "Ubuntu" (no path) → None (use fallback)
+        - "talwinter@Tal: ~/Projects/SomeProject" → "SomeProject"
+        """
+        if not window_title:
+            return None
+
+        title = window_title.strip()
+
+        # Skip if it looks like a simple shell name without a path
+        simple_names = ['ubuntu', 'bash', 'zsh', 'sh', 'powershell', 'cmd', 'pwsh',
+                        'fish', 'terminal', 'console', 'wsl']
+        if title.lower() in simple_names:
+            return None
+
+        # Try to find a path in the title
+        path = None
+
+        # Pattern 1: "user@host: /path" or "user@host:/path" (SSH/bash style)
+        # Also handles "MINGW64:/c/path"
+        match = re.search(r'[:\s](~?/[^\s]+|/[^\s]+)', title)
+        if match:
+            path = match.group(1)
+
+        # Pattern 2: Windows path "C:\path" or "C:/path"
+        if not path:
+            match = re.search(r'[A-Za-z]:[/\\][^\s]*', title)
+            if match:
+                path = match.group(0)
+
+        # Pattern 3: Just a Unix path at the start "/home/..." or "~/..."
+        if not path:
+            if title.startswith('~') or title.startswith('/'):
+                # Take the path portion (up to space or end)
+                match = re.match(r'(~?/[^\s]+)', title)
+                if match:
+                    path = match.group(1)
+
+        # Pattern 4: WSL path starting with /mnt/
+        if not path:
+            match = re.search(r'/mnt/[a-z]/[^\s]*', title, re.IGNORECASE)
+            if match:
+                path = match.group(0)
+
+        if not path:
+            return None
+
+        # Extract the last directory component from the path
+        # Normalize path separators
+        path = path.replace('\\', '/')
+
+        # Remove trailing slash
+        path = path.rstrip('/')
+
+        # Get the last component
+        parts = path.split('/')
+        if parts:
+            last_part = parts[-1]
+            # Skip if last part is empty or looks like a drive letter
+            if last_part and not re.match(r'^[a-zA-Z]$', last_part):
+                # Clean up the directory name
+                last_part = last_part.strip()
+                if last_part and len(last_part) <= 50:
+                    return last_part
+
+        return None
+
+    def _extract_teams_context(self, window_title: str) -> str:
+        """
+        Extract meeting/chat context from Teams window title.
+
+        Teams window title patterns:
+        - "Meeting Name - Microsoft Teams" → "Teams - Meeting Name"
+        - "Meeting Name | Microsoft Teams" → "Teams - Meeting Name"
+        - "John Doe | Chat" → "Teams - Chat: John Doe"
+        - "Chat | John Doe, Jane Smith" → "Teams - Chat: John Doe, Jane Smith"
+        - "Teams" (generic) → "Teams"
+        - Call windows often have "Call with..." or specific meeting info
+
+        Returns formatted string like "Teams - Meeting Name" or just "Teams".
+        """
+        if not window_title:
+            return "Teams"
+
+        title = window_title.strip()
+
+        # Skip if just "Microsoft Teams" or empty
+        if title.lower() in ['microsoft teams', 'teams', '']:
+            return "Teams"
+
+        # Meeting/call detection keywords
+        meeting_keywords = ['meeting', 'call with', 'scheduled', 'standup', 'sync',
+                           'review', 'planning', 'retro', '1:1', '1-1', 'one-on-one']
+
+        # Pattern 1: "Title - Microsoft Teams" or "Title | Microsoft Teams"
+        teams_suffix_pattern = re.compile(
+            r'^(.+?)\s*[-|]\s*Microsoft\s*Teams\s*$',
+            re.IGNORECASE
+        )
+        match = teams_suffix_pattern.match(title)
+        if match:
+            context = match.group(1).strip()
+            if context and context.lower() not in ['microsoft', '']:
+                # Truncate long meeting names
+                if len(context) > 50:
+                    context = context[:47] + "..."
+                return f"Teams - {context}"
+
+        # Pattern 2: "Something | Chat" (Teams chat window)
+        chat_pattern = re.compile(r'^(.+?)\s*\|\s*Chat\s*$', re.IGNORECASE)
+        match = chat_pattern.match(title)
+        if match:
+            person_or_group = match.group(1).strip()
+            if person_or_group:
+                if len(person_or_group) > 40:
+                    person_or_group = person_or_group[:37] + "..."
+                return f"Teams - Chat: {person_or_group}"
+
+        # Pattern 3: "Chat | Names" (group chat)
+        chat_prefix_pattern = re.compile(r'^Chat\s*\|\s*(.+)$', re.IGNORECASE)
+        match = chat_prefix_pattern.match(title)
+        if match:
+            names = match.group(1).strip()
+            if names:
+                if len(names) > 40:
+                    names = names[:37] + "..."
+                return f"Teams - Chat: {names}"
+
+        # Pattern 4: Check if it looks like a meeting by keywords
+        title_lower = title.lower()
+        for keyword in meeting_keywords:
+            if keyword in title_lower:
+                # Clean up the title for display
+                clean_title = title.split(' - ')[0].split(' | ')[0].strip()
+                if len(clean_title) > 50:
+                    clean_title = clean_title[:47] + "..."
+                return f"Teams - {clean_title}"
+
+        # Pattern 5: Just "Person Name" without clear markers - likely a call or chat
+        # If title doesn't contain common UI words, it might be a person/meeting name
+        ui_words = ['activity', 'calendar', 'files', 'apps', 'search', 'settings',
+                    'notifications', 'teams and channels', 'new teams']
+        if not any(word in title_lower for word in ui_words):
+            # Check if it has typical name patterns (contains spaces, reasonable length)
+            if ' ' in title and 3 <= len(title) <= 60:
+                # Likely a meeting or chat name
+                clean_title = title.split(' - ')[0].split(' | ')[0].strip()
+                if len(clean_title) > 50:
+                    clean_title = clean_title[:47] + "..."
+                if clean_title:
+                    return f"Teams - {clean_title}"
+
+        return "Teams"
+
     def get_project_suggestions(self, window_title: str) -> List[str]:
         """
         Get project name suggestions based on window title.
@@ -506,18 +762,43 @@ if __name__ == "__main__":
         ("devenv.exe", "Start Page - Microsoft Visual Studio"),
         # VS Code test cases (for compatibility)
         ("Code.exe", "main.py - MyProject - Visual Studio Code"),
-        # Other apps
+        # Browsers
         ("chrome.exe", "GitHub - anthropics/claude-code"),
-        ("Teams.exe", "Meeting with Team"),
+        ("msedge.exe", "Google Search - Work - Microsoft Edge"),
+        # Communication - Teams with various title formats
+        ("Teams.exe", "Weekly Standup - Microsoft Teams"),
+        ("ms-teams.exe", "John Doe | Chat"),
+        ("Teams.exe", "Chat | Jane Smith, Bob Wilson"),
+        ("ms-teams.exe", "Project Review Meeting - Microsoft Teams"),
+        ("Teams.exe", "Microsoft Teams"),  # Generic Teams window
+        ("WhatsApp.exe", "WhatsApp"),
+        # Remote Desktop
+        ("mstsc.exe", "server01 - Remote Desktop Connection"),
+        ("mstsc.exe", "192.168.1.100"),
+        # Security
+        ("FortiClient.exe", "FortiClient VPN"),
+        # Editors
         ("notepad.exe", "Untitled - Notepad"),
+        # System (should be hidden by default)
+        ("explorer.exe", "Downloads"),
+        ("explorer.exe", ""),
+        # Terminal with directory extraction
+        ("WindowsTerminal.exe", "talwinter@Tal: ~/Projects/ActivityMonitor"),
+        ("WindowsTerminal.exe", "MINGW64:/c/Projects/SomeApp"),
+        ("WindowsTerminal.exe", "/mnt/c/Projects/MyProject"),
+        ("WindowsTerminal.exe", "Ubuntu"),
+        ("powershell.exe", "C:\\Users\\talwinter\\Projects\\WebApi"),
     ]
 
     print("Project Mapper Test")
     print("-" * 60)
 
     for process, title in test_cases:
-        project = mapper.map_activity(process, title)
+        project, category = mapper.map_activity(process, title)
         print(f"Process: {process}")
         print(f"Title: {title}")
-        print(f"Project: {project or 'Uncategorized'}")
+        print(f"Project: {project}")
+        print(f"Category: {category}")
+        hidden = "(HIDDEN)" if category in Category.DEFAULT_HIDDEN else ""
+        print(f"Status: {hidden or 'visible'}")
         print("-" * 60)

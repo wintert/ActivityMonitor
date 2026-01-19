@@ -45,15 +45,34 @@ class TimelineView:
     time spent on a project.
     """
 
-    def __init__(self, database, parent: Optional[tk.Tk] = None):
+    def __init__(self, database, parent: Optional[tk.Tk] = None, config_manager=None):
         self.db = database
         self.parent = parent
+        self.config_manager = config_manager
         self.window: Optional[tk.Toplevel] = None
         self._color_map: Dict[str, str] = {}
         self._color_index = 0
         self._selected_date = datetime.now()
         self._tooltip = None
         self._segment_data: Dict[int, Dict] = {}  # Maps canvas item id to segment data
+        self._timeline_activities: List[Dict] = []  # Store activities for redraw on resize
+
+        # Zoom state (time range in hours, 0-24)
+        self._zoom_start = 0  # Start hour (0 = midnight)
+        self._zoom_end = 24   # End hour (24 = midnight next day)
+        self._min_zoom_range = 0.5  # Minimum 30 minutes
+
+    def _get_hidden_categories(self) -> List[str]:
+        """Get list of categories to hide."""
+        if self.config_manager:
+            return self.config_manager.config.hidden_categories
+        return ["System"]
+
+    def _get_hidden_apps(self) -> List[str]:
+        """Get list of app patterns to hide."""
+        if self.config_manager:
+            return self.config_manager.config.hidden_apps
+        return []
 
     def _get_project_color(self, project_name: str) -> str:
         """Get a consistent color for a project."""
@@ -136,9 +155,10 @@ class TimelineView:
         paned.add(summary_frame, stretch="always", minsize=80)
 
     def _create_header(self, parent):
-        """Create the header with date navigation."""
+        """Create the header with date navigation and zoom controls."""
+        # Date navigation row
         header = ttk.Frame(parent)
-        header.pack(fill=tk.X, pady=(0, 10))
+        header.pack(fill=tk.X, pady=(0, 5))
 
         # Previous day button
         prev_btn = ttk.Button(header, text="◀ Previous", command=self._prev_day)
@@ -160,6 +180,150 @@ class TimelineView:
         today_btn = ttk.Button(header, text="📅 Today", command=self._go_today)
         today_btn.pack(side=tk.RIGHT, padx=5)
 
+        # Zoom controls row
+        zoom_frame = ttk.Frame(parent)
+        zoom_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # From time
+        ttk.Label(zoom_frame, text="From:").pack(side=tk.LEFT)
+        self._from_hour_var = tk.StringVar(value="00:00")
+        from_combo = ttk.Combobox(
+            zoom_frame,
+            textvariable=self._from_hour_var,
+            values=self._get_time_values(),
+            width=6,
+            state='readonly'
+        )
+        from_combo.pack(side=tk.LEFT, padx=(5, 15))
+        from_combo.bind('<<ComboboxSelected>>', self._on_zoom_range_change)
+
+        # To time
+        ttk.Label(zoom_frame, text="To:").pack(side=tk.LEFT)
+        self._to_hour_var = tk.StringVar(value="24:00")
+        to_combo = ttk.Combobox(
+            zoom_frame,
+            textvariable=self._to_hour_var,
+            values=self._get_time_values(),
+            width=6,
+            state='readonly'
+        )
+        to_combo.pack(side=tk.LEFT, padx=(5, 15))
+        to_combo.bind('<<ComboboxSelected>>', self._on_zoom_range_change)
+
+        # Zoom buttons
+        ttk.Button(zoom_frame, text="🔍+", width=4, command=self._zoom_in).pack(side=tk.LEFT, padx=2)
+        ttk.Button(zoom_frame, text="🔍−", width=4, command=self._zoom_out).pack(side=tk.LEFT, padx=2)
+        ttk.Button(zoom_frame, text="Reset", width=6, command=self._zoom_reset).pack(side=tk.LEFT, padx=2)
+
+        # Zoom info label
+        self._zoom_label = ttk.Label(zoom_frame, text="", font=('Segoe UI', 9), foreground='#888')
+        self._zoom_label.pack(side=tk.RIGHT)
+
+    def _get_time_values(self) -> List[str]:
+        """Generate time values for combo boxes (every 30 minutes)."""
+        times = []
+        for hour in range(25):  # 0-24
+            if hour < 24:
+                times.append(f"{hour:02d}:00")
+                times.append(f"{hour:02d}:30")
+            else:
+                times.append("24:00")
+        return times
+
+    def _on_zoom_range_change(self, event=None):
+        """Handle zoom range change from combo boxes."""
+        from_str = self._from_hour_var.get()
+        to_str = self._to_hour_var.get()
+
+        # Parse time strings to hours
+        from_parts = from_str.split(':')
+        to_parts = to_str.split(':')
+
+        self._zoom_start = int(from_parts[0]) + int(from_parts[1]) / 60
+        self._zoom_end = int(to_parts[0]) + int(to_parts[1]) / 60
+
+        # Ensure valid range
+        if self._zoom_end <= self._zoom_start:
+            self._zoom_end = self._zoom_start + self._min_zoom_range
+
+        self._update_zoom_label()
+        self._draw_timeline()
+
+    def _zoom_in(self):
+        """Zoom in (reduce time range by 50%, centered)."""
+        current_range = self._zoom_end - self._zoom_start
+        new_range = max(current_range / 2, self._min_zoom_range)
+
+        center = (self._zoom_start + self._zoom_end) / 2
+        self._zoom_start = max(0, center - new_range / 2)
+        self._zoom_end = min(24, center + new_range / 2)
+
+        self._update_zoom_combos()
+        self._update_zoom_label()
+        self._draw_timeline()
+
+    def _zoom_out(self):
+        """Zoom out (increase time range by 100%, centered)."""
+        current_range = self._zoom_end - self._zoom_start
+        new_range = min(current_range * 2, 24)
+
+        center = (self._zoom_start + self._zoom_end) / 2
+        self._zoom_start = max(0, center - new_range / 2)
+        self._zoom_end = min(24, center + new_range / 2)
+
+        # Adjust if we hit boundaries
+        if self._zoom_start == 0:
+            self._zoom_end = min(24, new_range)
+        if self._zoom_end == 24:
+            self._zoom_start = max(0, 24 - new_range)
+
+        self._update_zoom_combos()
+        self._update_zoom_label()
+        self._draw_timeline()
+
+    def _zoom_reset(self):
+        """Reset zoom to full day view."""
+        self._zoom_start = 0
+        self._zoom_end = 24
+        self._update_zoom_combos()
+        self._update_zoom_label()
+        self._draw_timeline()
+
+    def _zoom_to_range(self, start_hour: float, end_hour: float):
+        """Zoom to a specific time range."""
+        self._zoom_start = max(0, start_hour)
+        self._zoom_end = min(24, end_hour)
+        if self._zoom_end - self._zoom_start < self._min_zoom_range:
+            self._zoom_end = self._zoom_start + self._min_zoom_range
+        self._update_zoom_combos()
+        self._update_zoom_label()
+        self._draw_timeline()
+
+    def _update_zoom_combos(self):
+        """Update combo boxes to reflect current zoom state."""
+        # Round to nearest 30 minutes for combo display
+        start_h = int(self._zoom_start)
+        start_m = 30 if (self._zoom_start % 1) >= 0.25 else 0
+        end_h = int(self._zoom_end)
+        end_m = 30 if (self._zoom_end % 1) >= 0.25 else 0
+
+        self._from_hour_var.set(f"{start_h:02d}:{start_m:02d}")
+        if end_h >= 24:
+            self._to_hour_var.set("24:00")
+        else:
+            self._to_hour_var.set(f"{end_h:02d}:{end_m:02d}")
+
+    def _update_zoom_label(self):
+        """Update zoom info label."""
+        range_hours = self._zoom_end - self._zoom_start
+        if range_hours >= 24:
+            self._zoom_label.config(text="Full day")
+        elif range_hours >= 1:
+            self._zoom_label.config(text=f"{range_hours:.1f}h range")
+        else:
+            minutes = int(range_hours * 60)
+            self._zoom_label.config(text=f"{minutes}m range")
+
     def _create_timeline_canvas(self, parent):
         """Create the visual timeline canvas."""
         timeline_frame = ttk.LabelFrame(parent, text="Timeline")
@@ -180,6 +344,12 @@ class TimelineView:
         # Bind tooltip events
         self._timeline_canvas.bind('<Motion>', self._on_canvas_motion)
         self._timeline_canvas.bind('<Leave>', self._hide_tooltip)
+
+        # Bind zoom events
+        self._timeline_canvas.bind('<Double-Button-1>', self._on_canvas_double_click)
+        self._timeline_canvas.bind('<MouseWheel>', self._on_canvas_mousewheel)
+        self._timeline_canvas.bind('<Button-4>', lambda e: self._on_canvas_mousewheel_linux(e, 1))  # Linux scroll up
+        self._timeline_canvas.bind('<Button-5>', lambda e: self._on_canvas_mousewheel_linux(e, -1))  # Linux scroll down
 
     def _on_canvas_motion(self, event):
         """Handle mouse motion over the timeline canvas."""
@@ -228,9 +398,11 @@ class TimelineView:
         text = f"{project}\n{start.strftime('%H:%M')} - {end.strftime('%H:%M')}\nDuration: {duration_str}\nStatus: {status}"
         self._tooltip_label.config(text=text)
 
-        # Position tooltip near cursor
-        x = self.window.winfo_rootx() + event.x + 15
-        y = self.window.winfo_rooty() + event.y + 100  # Offset for header
+        # Position tooltip near cursor (get canvas position on screen)
+        canvas_x = self._timeline_canvas.winfo_rootx()
+        canvas_y = self._timeline_canvas.winfo_rooty()
+        x = canvas_x + event.x + 15
+        y = canvas_y + event.y + 15
         self._tooltip.wm_geometry(f"+{x}+{y}")
         self._tooltip.deiconify()
 
@@ -238,6 +410,80 @@ class TimelineView:
         """Hide the tooltip."""
         if self._tooltip:
             self._tooltip.withdraw()
+
+    def _on_canvas_double_click(self, event):
+        """Handle double-click to zoom into the clicked time."""
+        canvas = self._timeline_canvas
+        width = canvas.winfo_width()
+        margin = 30
+        bar_width = width - 2 * margin
+
+        # Calculate clicked time
+        if event.x < margin or event.x > width - margin:
+            return
+
+        # Get time at click position
+        click_ratio = (event.x - margin) / bar_width
+        zoom_range = self._zoom_end - self._zoom_start
+        clicked_hour = self._zoom_start + click_ratio * zoom_range
+
+        # Zoom to 1 hour centered on click (or current range / 2)
+        new_range = max(zoom_range / 2, self._min_zoom_range)
+        self._zoom_start = max(0, clicked_hour - new_range / 2)
+        self._zoom_end = min(24, clicked_hour + new_range / 2)
+
+        self._update_zoom_combos()
+        self._update_zoom_label()
+        self._draw_timeline()
+
+    def _on_canvas_mousewheel(self, event):
+        """Handle mousewheel zoom on Windows."""
+        # Zoom in on scroll up, out on scroll down
+        if event.delta > 0:
+            self._zoom_at_position(event.x, zoom_in=True)
+        else:
+            self._zoom_at_position(event.x, zoom_in=False)
+
+    def _on_canvas_mousewheel_linux(self, event, direction):
+        """Handle mousewheel zoom on Linux."""
+        self._zoom_at_position(event.x, zoom_in=(direction > 0))
+
+    def _zoom_at_position(self, x_pos: int, zoom_in: bool):
+        """Zoom in or out centered on the given x position."""
+        canvas = self._timeline_canvas
+        width = canvas.winfo_width()
+        margin = 30
+        bar_width = width - 2 * margin
+
+        # Get time at mouse position
+        if x_pos < margin:
+            x_pos = margin
+        elif x_pos > width - margin:
+            x_pos = width - margin
+
+        click_ratio = (x_pos - margin) / bar_width
+        zoom_range = self._zoom_end - self._zoom_start
+        center_hour = self._zoom_start + click_ratio * zoom_range
+
+        # Calculate new range
+        if zoom_in:
+            new_range = max(zoom_range * 0.7, self._min_zoom_range)
+        else:
+            new_range = min(zoom_range * 1.4, 24)
+
+        # Keep the center point at the same position
+        self._zoom_start = max(0, center_hour - click_ratio * new_range)
+        self._zoom_end = min(24, self._zoom_start + new_range)
+
+        # Adjust if we hit boundaries
+        if self._zoom_end == 24:
+            self._zoom_start = max(0, 24 - new_range)
+        if self._zoom_start == 0:
+            self._zoom_end = min(24, new_range)
+
+        self._update_zoom_combos()
+        self._update_zoom_label()
+        self._draw_timeline()
 
     def _create_activity_list(self, parent):
         """Create the scrollable activity list with search filter."""
@@ -315,11 +561,22 @@ class TimelineView:
         # Update date label
         self._date_label.config(text=self._selected_date.strftime("%A, %B %d, %Y"))
 
-        # Get data from database
+        # Get filter settings
+        hidden_categories = self._get_hidden_categories()
+        hidden_apps = self._get_hidden_apps()
+
+        # Get data from database with filtering
         print(f">>> DEBUG: Fetching activities for {self._selected_date.date()}")
-        activities = self.db.get_activities_for_date(self._selected_date)
-        summary = self.db.get_daily_summary(self._selected_date)
+        activities = self.db.get_activities_for_date(
+            self._selected_date, hidden_categories, hidden_apps
+        )
+        summary = self.db.get_daily_summary(
+            self._selected_date, hidden_categories, hidden_apps
+        )
         print(f">>> DEBUG: Found {len(activities)} activities, {len(summary)} summary items")
+
+        # Store activities for redraw on resize
+        self._timeline_activities = activities
 
         # Update timeline canvas
         self._draw_timeline(activities)
@@ -331,7 +588,11 @@ class TimelineView:
         self._update_summary(summary)
 
     def _draw_timeline(self, activities: Optional[List[Dict]] = None):
-        """Draw the timeline visualization."""
+        """Draw the timeline visualization with zoom support."""
+        # Use stored activities if none provided (e.g., on resize)
+        if activities is None:
+            activities = self._timeline_activities
+
         canvas = self._timeline_canvas
         canvas.delete('all')
         self._segment_data.clear()  # Clear tooltip data
@@ -342,16 +603,54 @@ class TimelineView:
         if width < 10:
             return
 
-        # Draw time markers (hourly)
+        # Zoom range in hours
+        zoom_start = self._zoom_start
+        zoom_end = self._zoom_end
+        zoom_range = zoom_end - zoom_start
+
+        # Draw time markers
         bar_top = 30
         bar_height = height - 45
         margin = 30
+        bar_width = width - 2 * margin
 
-        # Draw hour labels
-        for hour in range(24):
-            x = margin + (hour / 24) * (width - 2 * margin)
-            if hour % 3 == 0:  # Every 3 hours
-                canvas.create_text(x, 15, text=f"{hour:02d}:00", font=('Segoe UI', 8), fill='#666')
+        # Calculate appropriate time label interval based on zoom level
+        if zoom_range <= 1:
+            # 1 hour or less: show every 10 minutes
+            label_interval_minutes = 10
+        elif zoom_range <= 3:
+            # 3 hours or less: show every 30 minutes
+            label_interval_minutes = 30
+        elif zoom_range <= 6:
+            # 6 hours or less: show every hour
+            label_interval_minutes = 60
+        elif zoom_range <= 12:
+            # 12 hours or less: show every 2 hours
+            label_interval_minutes = 120
+        else:
+            # Full day: show every 3 hours
+            label_interval_minutes = 180
+
+        # Draw time labels and grid lines
+        start_minutes = int(zoom_start * 60)
+        end_minutes = int(zoom_end * 60)
+
+        # Round to label interval
+        first_label = (start_minutes // label_interval_minutes) * label_interval_minutes
+        if first_label < start_minutes:
+            first_label += label_interval_minutes
+
+        for minutes in range(first_label, end_minutes + 1, label_interval_minutes):
+            hour = minutes // 60
+            minute = minutes % 60
+            time_hours = minutes / 60
+
+            # Position relative to zoom range
+            x = margin + ((time_hours - zoom_start) / zoom_range) * bar_width
+
+            if margin <= x <= width - margin:
+                time_str = f"{hour:02d}:{minute:02d}"
+                canvas.create_text(x, 15, text=time_str, font=('Segoe UI', 8), fill='#666')
                 canvas.create_line(x, bar_top, x, bar_top + bar_height, fill='#ddd', dash=(2, 2))
 
         # Draw background bar
@@ -374,16 +673,26 @@ class TimelineView:
 
         # Draw activity segments
         day_start = self._selected_date.replace(hour=0, minute=0, second=0, microsecond=0)
-        seconds_per_day = 24 * 60 * 60
-        bar_width = width - 2 * margin
+        zoom_start_seconds = zoom_start * 3600
+        zoom_end_seconds = zoom_end * 3600
+        zoom_range_seconds = zoom_range * 3600
 
         for segment in segments:
-            # Calculate position
+            # Calculate segment position in seconds from day start
             start_seconds = (segment['start'] - day_start).total_seconds()
             end_seconds = (segment['end'] - day_start).total_seconds()
 
-            x1 = margin + (start_seconds / seconds_per_day) * bar_width
-            x2 = margin + (end_seconds / seconds_per_day) * bar_width
+            # Skip segments outside zoom range
+            if end_seconds < zoom_start_seconds or start_seconds > zoom_end_seconds:
+                continue
+
+            # Clip to zoom range
+            start_seconds = max(start_seconds, zoom_start_seconds)
+            end_seconds = min(end_seconds, zoom_end_seconds)
+
+            # Calculate x positions relative to zoom range
+            x1 = margin + ((start_seconds - zoom_start_seconds) / zoom_range_seconds) * bar_width
+            x2 = margin + ((end_seconds - zoom_start_seconds) / zoom_range_seconds) * bar_width
 
             # Ensure minimum width
             if x2 - x1 < 2:
@@ -403,6 +712,28 @@ class TimelineView:
             )
             # Store segment data for tooltip
             self._segment_data[item_id] = segment
+
+            # Add project name label if segment is wide enough
+            segment_width = x2 - x1
+            project_name = segment['project'] or 'Uncategorized'
+            if not segment['is_active']:
+                project_name = f"[IDLE] {project_name}"
+
+            if segment_width > 50:  # Only show label if segment is at least 50px wide
+                # Truncate name to fit
+                max_chars = int(segment_width / 7)  # Approximate chars that fit
+                display_name = project_name[:max_chars] if len(project_name) > max_chars else project_name
+                if len(project_name) > max_chars:
+                    display_name = display_name[:-2] + ".."
+
+                canvas.create_text(
+                    (x1 + x2) / 2, bar_top + bar_height / 2,
+                    text=display_name,
+                    font=('Segoe UI', 8),
+                    fill='white' if segment['is_active'] else '#333',
+                    anchor='center',
+                    tags=('label',)
+                )
 
     def _group_activities_into_segments(self, activities: List[Dict]) -> List[Dict]:
         """Group consecutive activities with same project into segments."""
@@ -570,17 +901,27 @@ class TimelineView:
     def _prev_day(self):
         """Go to previous day."""
         self._selected_date -= timedelta(days=1)
+        self._zoom_reset_silent()
         self._safe_refresh()
 
     def _next_day(self):
         """Go to next day."""
         self._selected_date += timedelta(days=1)
+        self._zoom_reset_silent()
         self._safe_refresh()
 
     def _go_today(self):
         """Go to today."""
         self._selected_date = datetime.now()
+        self._zoom_reset_silent()
         self._safe_refresh()
+
+    def _zoom_reset_silent(self):
+        """Reset zoom without redrawing (used before refresh)."""
+        self._zoom_start = 0
+        self._zoom_end = 24
+        self._update_zoom_combos()
+        self._update_zoom_label()
 
     def _safe_refresh(self):
         """Refresh with proper UI update handling."""

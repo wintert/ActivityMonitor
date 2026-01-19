@@ -14,8 +14,10 @@ import time
 import logging
 import threading
 import re
+import json
+import os
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 
 import tkinter as tk
 
@@ -39,6 +41,7 @@ from ui.timeline_view import TimelineView
 from ui.report_view import ReportView
 from ui.settings_view import SettingsView
 from ui.project_mappings_view import ProjectMappingsView
+from ui.project_tags_view import ProjectTagsView
 
 # Configure logging
 logging.basicConfig(
@@ -72,6 +75,10 @@ class ActivityMonitor:
         )
         self.project_mapper = ProjectMapper(self.db)
 
+        # Load project tags for activity tagging
+        self._project_tags: List[dict] = []
+        self._load_project_tags()
+
         # Camera detector (optional)
         self.camera_detector = CameraDetector(
             check_interval_seconds=self.config.camera_check_interval_seconds,
@@ -86,6 +93,7 @@ class ActivityMonitor:
         self.report_view: Optional[ReportView] = None
         self.settings_view: Optional[SettingsView] = None
         self.mappings_view: Optional[ProjectMappingsView] = None
+        self.project_tags_view: Optional[ProjectTagsView] = None
 
         # State
         self._running = False
@@ -144,7 +152,7 @@ class ActivityMonitor:
         try:
             root = self._get_root()
             if self.timeline_view is None:
-                self.timeline_view = TimelineView(self.db, root)
+                self.timeline_view = TimelineView(self.db, root, self.config_manager)
             self.timeline_view.show()
         except Exception as e:
             logger.error(f"Error showing timeline: {e}", exc_info=True)
@@ -159,7 +167,7 @@ class ActivityMonitor:
         try:
             root = self._get_root()
             if self.report_view is None:
-                self.report_view = ReportView(self.db, root)
+                self.report_view = ReportView(self.db, root, self.config_manager)
             self.report_view.show()
         except Exception as e:
             logger.error(f"Error showing reports: {e}", exc_info=True)
@@ -240,6 +248,116 @@ class ActivityMonitor:
                 self.camera_detector.start()
         elif not self.config.camera_enabled and self.camera_detector.is_enabled:
             self.camera_detector.stop()
+
+        # Reload project tags in case they were modified
+        self._load_project_tags()
+
+    def _load_project_tags(self):
+        """Load project tags from database."""
+        self._project_tags = self.db.get_project_tags(enabled_only=True)
+        logger.info(f"Loaded {len(self._project_tags)} project tags")
+
+    def reload_project_tags(self):
+        """Reload project tags from database (call after adding/editing tags)."""
+        self._load_project_tags()
+
+    def _get_project_tag(self, project_name: Optional[str]) -> Optional[str]:
+        """
+        Find matching project tag for an activity based on project_name.
+
+        Checks if the project_name contains any of the keywords defined in project tags.
+        If auto-tagging is enabled and no match is found for a Development activity,
+        automatically creates a new project tag.
+
+        Args:
+            project_name: The activity's project name (e.g., "Visual Studio - SiiNewUmbraco")
+
+        Returns:
+            The tag name if a match is found, None otherwise
+        """
+        if not project_name:
+            return None
+
+        project_lower = project_name.lower()
+
+        # Check existing tags
+        for tag in self._project_tags:
+            for keyword in tag['keywords']:
+                if keyword.lower() in project_lower:
+                    return tag['name']
+
+        # Auto-create tag for Visual Studio / VS Code / Claude Code projects
+        if self.config.auto_create_project_tags:
+            new_tag = self._auto_create_project_tag(project_name)
+            if new_tag:
+                return new_tag
+
+        return None
+
+    def _auto_create_project_tag(self, project_name: str) -> Optional[str]:
+        """
+        Automatically create a project tag for detected development projects.
+
+        Extracts project name from patterns like:
+        - "Visual Studio - ProjectName"
+        - "VS Code - ProjectName"
+        - "Claude Code - ProjectName"
+
+        Returns the new tag name if created, None otherwise.
+        """
+        # Patterns that indicate a development project worth auto-tagging
+        dev_prefixes = [
+            'Visual Studio - ',
+            'VS Code - ',
+            'Claude Code - ',
+        ]
+
+        extracted_name = None
+        for prefix in dev_prefixes:
+            if project_name.startswith(prefix):
+                extracted_name = project_name[len(prefix):].strip()
+                break
+
+        if not extracted_name:
+            return None
+
+        # Skip generic names
+        skip_names = ['untitled', 'new project', 'app:', 'window:', 'unknown']
+        if any(skip in extracted_name.lower() for skip in skip_names):
+            return None
+
+        # Check if we already have a tag with this exact name
+        for tag in self._project_tags:
+            if tag['name'].lower() == extracted_name.lower():
+                return None  # Already exists
+
+        # Create new tag
+        try:
+            # Use the extracted name as both tag name and keyword
+            self.db.add_project_tag(
+                name=extracted_name,
+                keywords=[extracted_name],
+                color=self._get_next_tag_color(),
+                enabled=True
+            )
+            logger.info(f"Auto-created project tag: {extracted_name}")
+
+            # Reload tags to include the new one
+            self._load_project_tags()
+
+            return extracted_name
+        except Exception as e:
+            logger.error(f"Failed to auto-create project tag: {e}")
+            return None
+
+    def _get_next_tag_color(self) -> str:
+        """Get next color for auto-created tags."""
+        colors = [
+            '#4A90D9', '#50C878', '#FF6B6B', '#9B59B6', '#F39C12',
+            '#1ABC9C', '#E74C3C', '#3498DB', '#2ECC71', '#E67E22',
+        ]
+        # Use number of existing tags to cycle through colors
+        return colors[len(self._project_tags) % len(colors)]
 
     def _toggle_pause(self, is_paused: bool):
         """Toggle pause state."""
@@ -351,6 +469,152 @@ class ActivityMonitor:
 
         return title.strip()
 
+    def _check_claude_code_status(self) -> List[dict]:
+        """
+        Check if Claude Code is actively working in WSL.
+
+        Returns list of active sessions (supports multiple parallel sessions).
+        Each session is a dict with: project, hook_type, pid, last_update
+        """
+        if not self.config.claude_code_tracking_enabled:
+            return []
+
+        username = self.config.wsl_username
+        distro = self.config.wsl_distro
+
+        # Try different WSL path formats for the STATUS DIRECTORY
+        wsl_dirs = [
+            f"\\\\wsl$\\{distro}\\home\\{username}\\.claude-activity-status",
+            f"\\\\wsl.localhost\\{distro}\\home\\{username}\\.claude-activity-status",
+        ]
+
+        active_sessions = []
+
+        for dir_path in wsl_dirs:
+            if os.path.isdir(dir_path):
+                try:
+                    # Scan all status files (named by project)
+                    for filename in os.listdir(dir_path):
+                        if filename.endswith('.json'):
+                            filepath = os.path.join(dir_path, filename)
+                            try:
+                                with open(filepath, 'r', encoding='utf-8') as f:
+                                    status = json.load(f)
+
+                                if status.get('active'):
+                                    # Check if recently updated
+                                    last_update_str = status.get('last_update', '')
+                                    if last_update_str:
+                                        try:
+                                            last_update = datetime.fromisoformat(
+                                                last_update_str.replace('Z', '+00:00')
+                                            )
+                                            if last_update.tzinfo is not None:
+                                                last_update = last_update.replace(tzinfo=None)
+
+                                            age_seconds = (datetime.now() - last_update).total_seconds()
+
+                                            if age_seconds < self.config.claude_code_stale_threshold_seconds:
+                                                active_sessions.append({
+                                                    'project': status.get('project', 'Unknown'),
+                                                    'last_update': last_update
+                                                })
+                                        except (ValueError, TypeError) as e:
+                                            logger.debug(f"Error parsing timestamp in {filepath}: {e}")
+                                            # If we can't parse timestamp, assume it's recent
+                                            active_sessions.append({
+                                                'project': status.get('project', 'Unknown'),
+                                                'last_update': datetime.now()
+                                            })
+                            except (json.JSONDecodeError, IOError) as e:
+                                logger.debug(f"Error reading {filepath}: {e}")
+                                continue
+                except OSError as e:
+                    logger.debug(f"Error scanning directory {dir_path}: {e}")
+                    continue
+                break  # Found a valid directory, don't try other paths
+
+        return active_sessions
+
+    def _check_teams_meeting_status(self) -> Optional[dict]:
+        """
+        Check if user is in a Teams meeting (even if not focused).
+
+        Enumerates all windows to find Teams meeting windows.
+        Returns meeting info dict if in meeting, None otherwise.
+
+        Meeting indicators:
+        - Window title contains meeting-related keywords
+        - Window is from Teams process (ms-teams.exe, Teams.exe)
+        """
+        if not self.config.teams_background_tracking_enabled:
+            return None
+
+        try:
+            # Get all windows
+            all_windows = self.window_tracker.get_all_windows()
+
+            # Teams process names (new Teams uses ms-teams.exe, old uses Teams.exe)
+            teams_processes = ['ms-teams.exe', 'teams.exe']
+
+            # Keywords that indicate an active meeting/call (not just the main Teams window)
+            meeting_indicators = [
+                'meeting', 'call with', ' | call', 'incoming call',
+                'screen sharing', 'presenting', 'recording',
+                # New Teams often shows meeting name directly
+            ]
+
+            # UI windows to exclude (these are not meetings)
+            exclude_patterns = [
+                'microsoft teams', 'teams', 'activity', 'calendar',
+                'files', 'apps', 'teams and channels', 'new teams',
+                'chat', 'notifications', 'search'
+            ]
+
+            for window in all_windows:
+                process_lower = window.process_name.lower()
+                title_lower = window.title.lower()
+
+                # Check if this is a Teams window
+                if not any(proc in process_lower for proc in teams_processes):
+                    continue
+
+                # Skip main Teams UI windows
+                # A meeting window typically has a specific meeting name, not generic UI
+                if title_lower.strip() in ['', 'microsoft teams', 'teams']:
+                    continue
+
+                # Check for explicit meeting indicators
+                is_meeting = False
+                for indicator in meeting_indicators:
+                    if indicator in title_lower:
+                        is_meeting = True
+                        break
+
+                # If no explicit indicator, check if it's NOT a UI window
+                # (meaning it's likely a meeting or call)
+                if not is_meeting:
+                    is_ui_window = any(excl in title_lower for excl in exclude_patterns)
+                    # If title has a name-like structure (spaces, proper length),
+                    # it's likely a meeting
+                    if not is_ui_window and len(window.title) > 5 and ' ' in window.title:
+                        is_meeting = True
+
+                if is_meeting:
+                    # Extract meeting name using project_mapper's Teams context extraction
+                    meeting_name = self.project_mapper._extract_teams_context(window.title)
+                    return {
+                        'meeting_name': meeting_name,
+                        'window_title': window.title,
+                        'process_name': window.process_name
+                    }
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Error checking Teams meeting status: {e}")
+            return None
+
     def _track_activity(self):
         """Track current activity and log it."""
         # Get current window
@@ -372,13 +636,19 @@ class ActivityMonitor:
         idle_state = self.idle_monitor.update()
         is_idle = idle_state['is_idle']
 
+        # Lock screen means user is definitely away - no need to wait for idle timeout
+        lock_screen_processes = ['lockapp.exe', 'logonui.exe']
+        is_lock_screen = window.process_name.lower() in lock_screen_processes
+        if is_lock_screen:
+            is_idle = True
+
         # Check camera presence (if enabled)
         camera_away = False
         if self.config.camera_enabled and self.camera_detector.is_enabled:
             camera_away = not self.camera_detector.is_present
 
         # Determine if actively working (keyboard/mouse activity)
-        # Camera away overrides everything - if you're not at desk, you're not active
+        # Lock screen or camera away overrides everything - if you're not at desk, you're not active
         is_active = not is_idle and not camera_away
         self._is_active = is_active
 
@@ -389,10 +659,11 @@ class ActivityMonitor:
         if not clean_title or clean_title.lower() in ['program manager', '']:
             clean_title = "Desktop"
 
-        # Always map to project
+        # Always map to project and category
         project = None
+        category = None
         if self.config.visual_studio_solution_detection:
-            project = self.project_mapper.map_activity(
+            project, category = self.project_mapper.map_activity(
                 window.process_name,
                 window.title  # Use original title for mapping (has more context)
             )
@@ -407,19 +678,70 @@ class ActivityMonitor:
 
         self._current_project = project
 
-        # Log activity with cleaned title
+        # Find matching project tag
+        project_tag = self._get_project_tag(project)
+
+        # Log activity with cleaned title, category, and project tag
         self.db.log_activity(
             window_title=clean_title,
             process_name=window.process_name,
             project_name=project,
             is_active=is_active,
-            duration_seconds=self.config.polling_interval_seconds
+            duration_seconds=self.config.polling_interval_seconds,
+            category=category,
+            project_tag=project_tag
         )
 
         # Console output for visibility
         status = "ACTIVE" if is_active else "IDLE"
         project_display = project or "Uncategorized"
         print(f"[{status}] {project_display}: {window.process_name} - {clean_title[:50]}...")
+
+        # Check for Claude Code background activity (supports multiple parallel sessions)
+        claude_sessions = self._check_claude_code_status()
+        for session in claude_sessions:
+            claude_project = f"Claude Code - {session['project']}"
+
+            # Only log if foreground isn't already this Claude terminal
+            foreground_is_claude = window.process_name.lower() in ['windowsterminal.exe', 'ubuntu.exe', 'wsl.exe']
+            foreground_has_claude = 'claude' in (window.title or '').lower()
+
+            if not (foreground_is_claude and foreground_has_claude):
+                # Claude is working in background while user looks at something else
+                from project_mapper import Category
+                claude_tag = self._get_project_tag(claude_project)
+                self.db.log_activity(
+                    window_title="Claude Code (Background)",
+                    process_name="claude-code",
+                    project_name=claude_project,
+                    is_active=True,  # Claude is actively working
+                    duration_seconds=self.config.polling_interval_seconds,
+                    category=Category.DEVELOPMENT,
+                    project_tag=claude_tag
+                )
+                print(f"[CLAUDE] {claude_project}: Working in background")
+
+        # Check for Teams meeting background activity
+        teams_meeting = self._check_teams_meeting_status()
+        if teams_meeting:
+            # Only log if foreground isn't already Teams
+            foreground_is_teams = 'teams' in window.process_name.lower()
+
+            if not foreground_is_teams:
+                # User is in a Teams meeting but focused on something else
+                from project_mapper import Category
+                meeting_project = teams_meeting['meeting_name']
+                teams_tag = self._get_project_tag(meeting_project)
+                self.db.log_activity(
+                    window_title=f"Teams Meeting (Background): {teams_meeting['window_title'][:50]}",
+                    process_name=teams_meeting['process_name'],
+                    project_name=meeting_project,
+                    is_active=True,  # In meeting = active work time
+                    duration_seconds=self.config.polling_interval_seconds,
+                    category=Category.COMMUNICATION,
+                    project_tag=teams_tag
+                )
+                print(f"[TEAMS] {meeting_project}: In meeting (background)")
 
         # Log state changes
         if idle_state['became_idle']:
@@ -544,6 +866,8 @@ class ActivityMonitor:
             self.settings_view.close()
         if self.mappings_view:
             self.mappings_view.close()
+        if self.project_tags_view:
+            self.project_tags_view.close()
 
         # Destroy root window
         if self._root:

@@ -196,6 +196,54 @@ class WindowTracker:
         return (current.handle != self._last_window.handle or
                 current.title != self._last_window.title)
 
+    def get_all_windows(self) -> list:
+        """
+        Enumerate all visible windows.
+
+        Returns a list of WindowInfo objects for all visible windows.
+        Useful for detecting background activity like Teams meetings.
+        """
+        windows = []
+
+        def enum_callback(hwnd, _):
+            """Callback for EnumWindows."""
+            try:
+                # Skip invisible windows
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+
+                # Get window title
+                title = self._get_window_title(hwnd)
+                if not title:  # Skip windows without title
+                    return True
+
+                # Get process info
+                process_id = self._get_window_process_id(hwnd)
+                process_name = self._get_process_name(process_id) if process_id else "Unknown"
+
+                window_info = WindowInfo(
+                    handle=hwnd,
+                    title=title,
+                    process_name=process_name,
+                    process_id=process_id or 0,
+                    cursor_in_window=False  # Not relevant for enumeration
+                )
+                windows.append(window_info)
+
+            except Exception as e:
+                logger.debug(f"Error enumerating window {hwnd}: {e}")
+
+            return True  # Continue enumeration
+
+        # Define the callback type
+        WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        callback = WNDENUMPROC(enum_callback)
+
+        # Enumerate all top-level windows
+        user32.EnumWindows(callback, 0)
+
+        return windows
+
 
 def get_active_window_info() -> Optional[WindowInfo]:
     """Convenience function to get active window info."""
