@@ -140,14 +140,14 @@ class ReportView:
         main_frame = ttk.Frame(self.window)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Header with view toggle and date navigation
+        # Header with view toggle and date navigation (top)
         self._create_header(main_frame)
 
-        # Report content area
-        self._create_report_area(main_frame)
-
-        # Export buttons
+        # Export buttons (bottom - pack with side=BOTTOM before notebook)
         self._create_export_buttons(main_frame)
+
+        # Report content area (middle - expands to fill remaining space)
+        self._create_report_area(main_frame)
 
     def _create_header(self, parent):
         """Create the header with view toggle and date navigation."""
@@ -511,7 +511,7 @@ class ReportView:
     def _create_export_buttons(self, parent):
         """Create export buttons."""
         export_frame = ttk.Frame(parent)
-        export_frame.pack(fill=tk.X)
+        export_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(10, 0))
 
         ttk.Button(
             export_frame,
