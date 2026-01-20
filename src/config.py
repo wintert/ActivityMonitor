@@ -68,6 +68,10 @@ class Config:
     admiral_url: str = "https://admiral.co.il/AdmiralPro_ssl2//Main/Frame_Main.aspx?C=F1308D9B"
     admiral_default_comment: str = "פיתוח"  # Default comment for time entries
 
+    # Report settings
+    minimum_activity_seconds: int = 30  # Filter out activities shorter than this from reports
+    time_rounding_minutes: int = 0  # Round times to nearest X minutes (0 = no rounding, 15 or 30 common)
+
     # Data retention
     keep_data_days: int = 90
 

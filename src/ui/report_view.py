@@ -76,6 +76,18 @@ class ReportView:
             return self.config_manager.config.hidden_apps
         return []
 
+    def _get_min_activity_seconds(self) -> int:
+        """Get minimum activity seconds threshold."""
+        if self.config_manager:
+            return self.config_manager.config.minimum_activity_seconds
+        return 0
+
+    def _get_time_rounding_minutes(self) -> int:
+        """Get time rounding setting (0 = no rounding)."""
+        if self.config_manager:
+            return self.config_manager.config.time_rounding_minutes
+        return 0
+
     def _get_project_color(self, project_name: str) -> str:
         """Get a consistent color for a project."""
         if project_name not in self._color_map:
@@ -246,7 +258,12 @@ class ReportView:
         self._notebook.add(table_frame, text="Table")
         self._create_table(table_frame)
 
-        # Tab 2: Charts view (only if matplotlib available)
+        # Tab 2: Weekly Grid view (hours per project per day)
+        grid_frame = ttk.Frame(self._notebook)
+        self._notebook.add(grid_frame, text="Weekly Grid")
+        self._create_weekly_grid(grid_frame)
+
+        # Tab 3: Charts view (only if matplotlib available)
         if MATPLOTLIB_AVAILABLE:
             charts_frame = ttk.Frame(self._notebook)
             self._notebook.add(charts_frame, text="Charts")
@@ -279,6 +296,112 @@ class ReportView:
 
         self._report_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _create_weekly_grid(self, parent):
+        """Create the weekly grid view showing hours per project per day."""
+        # Column headers: Project, Sun, Mon, Tue, Wed, Thu, Fri, Sat, Total
+        columns = ('project', 'sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'total')
+        self._weekly_grid_tree = ttk.Treeview(
+            parent,
+            columns=columns,
+            show='headings',
+            height=15
+        )
+
+        # Configure columns
+        self._weekly_grid_tree.heading('project', text='Project')
+        self._weekly_grid_tree.column('project', width=180, minwidth=120)
+
+        day_names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+        day_cols = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+        for col, name in zip(day_cols, day_names):
+            self._weekly_grid_tree.heading(col, text=name)
+            self._weekly_grid_tree.column(col, width=60, minwidth=50, anchor='center')
+
+        self._weekly_grid_tree.heading('total', text='Total')
+        self._weekly_grid_tree.column('total', width=70, minwidth=60, anchor='center')
+
+        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self._weekly_grid_tree.yview)
+        self._weekly_grid_tree.configure(yscrollcommand=scrollbar.set)
+
+        self._weekly_grid_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _update_weekly_grid(self, start_date: datetime):
+        """Update the weekly grid with data for the week starting at start_date."""
+        # Clear existing data
+        for item in self._weekly_grid_tree.get_children():
+            self._weekly_grid_tree.delete(item)
+
+        hidden_categories = self._get_hidden_categories()
+        hidden_apps = self._get_hidden_apps()
+        min_activity_seconds = self._get_min_activity_seconds()
+
+        # Get raw weekly data (project, date, active_seconds)
+        raw_data = self.db.get_weekly_summary(start_date, hidden_categories, hidden_apps, min_activity_seconds)
+
+        # Build a dict: project -> {day_index: hours}
+        project_days: Dict[str, Dict[int, float]] = {}
+        for item in raw_data:
+            project = item['project_name']
+            date_str = item['date']
+            seconds = item.get('active_seconds', 0)
+
+            # Parse date and get day of week (0=Mon, 6=Sun in Python, but we want Sun=0)
+            try:
+                dt = datetime.strptime(date_str, '%Y-%m-%d')
+                # Convert to Sun=0, Mon=1, ... Sat=6
+                day_index = (dt.weekday() + 1) % 7
+            except:
+                continue
+
+            if project not in project_days:
+                project_days[project] = {}
+
+            hours = seconds / 3600
+            project_days[project][day_index] = project_days[project].get(day_index, 0) + hours
+
+        # Sort projects by total hours
+        project_totals = {p: sum(days.values()) for p, days in project_days.items()}
+        sorted_projects = sorted(project_totals.keys(), key=lambda p: project_totals[p], reverse=True)
+
+        # Add rows to grid
+        for project in sorted_projects:
+            days = project_days[project]
+            total = sum(days.values())
+
+            # Format hours for each day
+            values = [project]
+            for day_idx in range(7):
+                hours = days.get(day_idx, 0)
+                if hours > 0:
+                    values.append(f"{hours:.1f}h")
+                else:
+                    values.append("-")
+
+            values.append(f"{total:.1f}h")
+
+            self._weekly_grid_tree.insert('', tk.END, values=values)
+
+        # Add totals row
+        day_totals = [0.0] * 7
+        for project, days in project_days.items():
+            for day_idx, hours in days.items():
+                day_totals[day_idx] += hours
+
+        grand_total = sum(day_totals)
+        total_values = ['TOTAL']
+        for hours in day_totals:
+            total_values.append(f"{hours:.1f}h" if hours > 0 else "-")
+        total_values.append(f"{grand_total:.1f}h")
+
+        self._weekly_grid_tree.insert('', tk.END, values=total_values, tags=('total',))
+
+        # Style the total row
+        try:
+            self._weekly_grid_tree.tag_configure('total', font=('Segoe UI', 10, 'bold'))
+        except:
+            pass
 
     def _create_charts(self, parent):
         """Create the charts area with pie chart and bar chart stacked vertically."""
@@ -425,6 +548,7 @@ class ReportView:
 
         hidden_categories = self._get_hidden_categories()
         hidden_apps = self._get_hidden_apps()
+        min_activity_seconds = self._get_min_activity_seconds()
 
         # Update date label
         if self._view_mode == 'daily':
@@ -432,7 +556,7 @@ class ReportView:
             if self._group_by == 'category':
                 # Get hierarchical data for category view
                 category_data = self.db.get_daily_summary_by_category_with_activities(
-                    self._selected_date, hidden_categories, hidden_apps
+                    self._selected_date, hidden_categories, hidden_apps, min_activity_seconds
                 )
                 # Also get flat data for charts (category totals)
                 data = [
@@ -444,7 +568,7 @@ class ReportView:
             elif self._group_by == 'project':
                 # Get hierarchical data for project tag view
                 project_data = self.db.get_daily_summary_by_project_tag(
-                    self._selected_date, hidden_categories, hidden_apps
+                    self._selected_date, hidden_categories, hidden_apps, min_activity_seconds
                 )
                 # Also get flat data for charts (project totals)
                 data = [
@@ -454,7 +578,7 @@ class ReportView:
                 ]
                 category_data = None
             else:
-                data = self.db.get_daily_summary(self._selected_date, hidden_categories, hidden_apps)
+                data = self.db.get_daily_summary(self._selected_date, hidden_categories, hidden_apps, min_activity_seconds)
                 category_data = None
                 project_data = None
         else:
@@ -464,7 +588,7 @@ class ReportView:
             self._date_label.config(
                 text=f"{start.strftime('%b %d')} - {end.strftime('%b %d, %Y')}"
             )
-            data = self._get_weekly_data(start, hidden_categories, hidden_apps)
+            data = self._get_weekly_data(start, hidden_categories, hidden_apps, min_activity_seconds)
             category_data = None
             project_data = None
 
@@ -511,6 +635,10 @@ class ReportView:
         # Update charts
         if MATPLOTLIB_AVAILABLE:
             self._update_charts(data)
+
+        # Update weekly grid (always update, it handles its own date range)
+        start = self._selected_date - timedelta(days=self._selected_date.weekday())
+        self._update_weekly_grid(start)
 
     def _populate_category_tree(self, category_data: dict, total_active: int):
         """Populate the tree with hierarchical category data."""
@@ -608,10 +736,11 @@ class ReportView:
 
     def _get_weekly_data(self, start_date: datetime,
                          hidden_categories: List[str] = None,
-                         hidden_apps: List[str] = None) -> List[Dict]:
+                         hidden_apps: List[str] = None,
+                         min_activity_seconds: int = 0) -> List[Dict]:
         """Get aggregated weekly data."""
         # Get raw weekly data
-        raw_data = self.db.get_weekly_summary(start_date, hidden_categories, hidden_apps)
+        raw_data = self.db.get_weekly_summary(start_date, hidden_categories, hidden_apps, min_activity_seconds)
 
         # Aggregate by project
         project_totals = {}
@@ -630,8 +759,21 @@ class ReportView:
             )
         ]
 
-    def _format_duration(self, seconds: int) -> str:
-        """Format seconds as human-readable duration."""
+    def _format_duration(self, seconds: int, apply_rounding: bool = True) -> str:
+        """Format seconds as human-readable duration.
+
+        Args:
+            seconds: Duration in seconds
+            apply_rounding: Whether to apply time rounding setting
+        """
+        # Apply time rounding if configured
+        rounding_minutes = self._get_time_rounding_minutes() if apply_rounding else 0
+        if rounding_minutes > 0:
+            # Round to nearest interval
+            total_minutes = seconds / 60
+            rounded_minutes = round(total_minutes / rounding_minutes) * rounding_minutes
+            seconds = int(rounded_minutes * 60)
+
         if seconds < 60:
             return f"{seconds}s"
 

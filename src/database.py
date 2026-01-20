@@ -186,8 +186,16 @@ class Database:
 
     def get_daily_summary(self, date: datetime,
                           hidden_categories: Optional[List[str]] = None,
-                          hidden_apps: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """Get aggregated time per project for a date."""
+                          hidden_apps: Optional[List[str]] = None,
+                          min_activity_seconds: int = 0) -> List[Dict[str, Any]]:
+        """Get aggregated time per project for a date.
+
+        Args:
+            date: The date to get summary for
+            hidden_categories: Categories to exclude from results
+            hidden_apps: App patterns to exclude from results
+            min_activity_seconds: Minimum active seconds to include (filters out short activities)
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -218,6 +226,13 @@ class Database:
 
         query += '''
             GROUP BY COALESCE(project_name, 'Uncategorized')
+        '''
+
+        # Filter out activities below minimum threshold
+        if min_activity_seconds > 0:
+            query += f' HAVING active_seconds >= {min_activity_seconds}'
+
+        query += '''
             ORDER BY active_seconds DESC
         '''
 
@@ -274,9 +289,13 @@ class Database:
 
     def get_daily_summary_by_category_with_activities(self, date: datetime,
                                                        hidden_categories: Optional[List[str]] = None,
-                                                       hidden_apps: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
+                                                       hidden_apps: Optional[List[str]] = None,
+                                                       min_activity_seconds: int = 0) -> Dict[str, Dict[str, Any]]:
         """
         Get aggregated time per category with nested activities for a date.
+
+        Args:
+            min_activity_seconds: Minimum active seconds to include individual activities
 
         Returns a dict structure:
         {
@@ -322,6 +341,13 @@ class Database:
 
         query += '''
             GROUP BY COALESCE(category, 'Other'), COALESCE(project_name, 'Uncategorized')
+        '''
+
+        # Filter out activities below minimum threshold
+        if min_activity_seconds > 0:
+            query += f' HAVING active_seconds >= {min_activity_seconds}'
+
+        query += '''
             ORDER BY category, active_seconds DESC
         '''
 
@@ -367,8 +393,13 @@ class Database:
 
     def get_weekly_summary(self, start_date: datetime,
                            hidden_categories: Optional[List[str]] = None,
-                           hidden_apps: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """Get aggregated time per project for a week."""
+                           hidden_apps: Optional[List[str]] = None,
+                           min_activity_seconds: int = 0) -> List[Dict[str, Any]]:
+        """Get aggregated time per project for a week.
+
+        Args:
+            min_activity_seconds: Minimum active seconds to include (per project per day)
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -396,6 +427,12 @@ class Database:
 
         query += '''
             GROUP BY COALESCE(project_name, 'Uncategorized'), DATE(timestamp)
+        '''
+
+        if min_activity_seconds > 0:
+            query += f' HAVING active_seconds >= {min_activity_seconds}'
+
+        query += '''
             ORDER BY date, active_seconds DESC
         '''
 
@@ -676,12 +713,16 @@ class Database:
 
     def get_daily_summary_by_project_tag(self, date: datetime,
                                           hidden_categories: Optional[List[str]] = None,
-                                          hidden_apps: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
+                                          hidden_apps: Optional[List[str]] = None,
+                                          min_activity_seconds: int = 0) -> Dict[str, Dict[str, Any]]:
         """
         Get activities grouped by project_tag with nested activities for a date.
 
         Only returns activities that have a project_tag assigned.
         Untagged activities (Spotify, browsing, etc.) are excluded from this view.
+
+        Args:
+            min_activity_seconds: Minimum active seconds to include individual activities
 
         Returns a dict structure:
         {
@@ -729,6 +770,12 @@ class Database:
 
         query += '''
             GROUP BY project_tag, COALESCE(project_name, 'Uncategorized')
+        '''
+
+        if min_activity_seconds > 0:
+            query += f' HAVING active_seconds >= {min_activity_seconds}'
+
+        query += '''
             ORDER BY project_tag, active_seconds DESC
         '''
 
