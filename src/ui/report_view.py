@@ -234,20 +234,40 @@ class ReportView:
         stats_frame = ttk.Frame(parent)
         stats_frame.pack(fill=tk.X, pady=(0, 10))
 
+        # Left side: Active and Idle time
+        time_stats = ttk.Frame(stats_frame)
+        time_stats.pack(side=tk.LEFT)
+
         self._total_label = ttk.Label(
-            stats_frame,
-            text="Total Active Time: --",
-            font=('Segoe UI', 12, 'bold')
+            time_stats,
+            text="Active: --",
+            font=('Segoe UI', 12, 'bold'),
+            foreground='#50C878'  # Green for active
         )
         self._total_label.pack(side=tk.LEFT)
 
         self._idle_label = ttk.Label(
-            stats_frame,
-            text="Idle Time: --",
-            font=('Segoe UI', 10),
-            foreground='#666'
+            time_stats,
+            text="Idle: --",
+            font=('Segoe UI', 12, 'bold'),
+            foreground='#FF6B6B'  # Red for idle
         )
         self._idle_label.pack(side=tk.LEFT, padx=(20, 0))
+
+        self._ratio_label = ttk.Label(
+            time_stats,
+            text="",
+            font=('Segoe UI', 10),
+            foreground='#888'
+        )
+        self._ratio_label.pack(side=tk.LEFT, padx=(15, 0))
+
+        # Right side: Add Manual Entry button
+        ttk.Button(
+            stats_frame,
+            text="+ Add Time",
+            command=self._show_add_time_dialog
+        ).pack(side=tk.RIGHT)
 
         # Notebook for tabs
         self._notebook = ttk.Notebook(parent)
@@ -597,8 +617,15 @@ class ReportView:
         total_all = sum(item.get('total_seconds', item.get('active_seconds', 0)) for item in data)
         total_idle = total_all - total_active
 
-        self._total_label.config(text=f"Total Active Time: {self._format_duration(total_active)}")
-        self._idle_label.config(text=f"Idle Time: {self._format_duration(total_idle)}")
+        self._total_label.config(text=f"Active: {self._format_duration(total_active)}")
+        self._idle_label.config(text=f"Idle: {self._format_duration(total_idle)}")
+
+        # Show active percentage
+        if total_all > 0:
+            active_pct = (total_active / total_all) * 100
+            self._ratio_label.config(text=f"({active_pct:.0f}% active)")
+        else:
+            self._ratio_label.config(text="")
 
         # Update table header based on grouping mode
         if self._group_by == 'category':
@@ -875,6 +902,116 @@ class ReportView:
         self.window.clipboard_clear()
         self.window.clipboard_append(text)
         self._show_info("Copied", "Report copied to clipboard!")
+
+    def _show_add_time_dialog(self):
+        """Show dialog to manually add time entry."""
+        dialog = Toplevel(self.window)
+        dialog.title("Add Manual Time Entry")
+        dialog.geometry("400x300")
+        dialog.transient(self.window)
+        dialog.grab_set()
+
+        # Center the dialog
+        dialog.update_idletasks()
+        x = self.window.winfo_x() + (self.window.winfo_width() - 400) // 2
+        y = self.window.winfo_y() + (self.window.winfo_height() - 300) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        main = ttk.Frame(dialog, padding=20)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        # Date selection
+        date_frame = ttk.Frame(main)
+        date_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(date_frame, text="Date:", width=12).pack(side=tk.LEFT)
+        date_var = tk.StringVar(value=self._selected_date.strftime("%Y-%m-%d"))
+        date_entry = ttk.Entry(date_frame, textvariable=date_var, width=15)
+        date_entry.pack(side=tk.LEFT)
+        ttk.Label(date_frame, text="(YYYY-MM-DD)", foreground='#888').pack(side=tk.LEFT, padx=(5, 0))
+
+        # Project selection
+        project_frame = ttk.Frame(main)
+        project_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(project_frame, text="Project:", width=12).pack(side=tk.LEFT)
+
+        # Get existing project names for dropdown
+        existing_projects = []
+        try:
+            summary = self.db.get_daily_summary(self._selected_date)
+            existing_projects = [item['project_name'] for item in summary]
+        except:
+            pass
+
+        project_var = tk.StringVar()
+        project_combo = ttk.Combobox(project_frame, textvariable=project_var, values=existing_projects, width=25)
+        project_combo.pack(side=tk.LEFT)
+
+        # Hours entry
+        hours_frame = ttk.Frame(main)
+        hours_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(hours_frame, text="Duration:", width=12).pack(side=tk.LEFT)
+
+        hours_var = tk.StringVar(value="0")
+        hours_spin = ttk.Spinbox(hours_frame, from_=0, to=12, textvariable=hours_var, width=5)
+        hours_spin.pack(side=tk.LEFT)
+        ttk.Label(hours_frame, text="h").pack(side=tk.LEFT, padx=(2, 10))
+
+        minutes_var = tk.StringVar(value="30")
+        minutes_spin = ttk.Spinbox(hours_frame, from_=0, to=59, textvariable=minutes_var, width=5)
+        minutes_spin.pack(side=tk.LEFT)
+        ttk.Label(hours_frame, text="m").pack(side=tk.LEFT, padx=(2, 0))
+
+        # Description
+        desc_frame = ttk.Frame(main)
+        desc_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(desc_frame, text="Description:", width=12).pack(side=tk.LEFT, anchor=tk.N)
+        desc_text = tk.Text(desc_frame, height=3, width=30)
+        desc_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        desc_text.insert('1.0', 'Manual entry')
+
+        # Buttons
+        btn_frame = ttk.Frame(main)
+        btn_frame.pack(fill=tk.X, pady=(20, 0))
+
+        def save_entry():
+            try:
+                # Parse inputs
+                entry_date = datetime.strptime(date_var.get(), "%Y-%m-%d")
+                project = project_var.get().strip()
+                hours = int(hours_var.get() or 0)
+                minutes = int(minutes_var.get() or 0)
+                description = desc_text.get('1.0', tk.END).strip()
+
+                if not project:
+                    self._show_error("Error", "Please enter a project name")
+                    return
+
+                if hours == 0 and minutes == 0:
+                    self._show_error("Error", "Please enter a duration")
+                    return
+
+                total_seconds = hours * 3600 + minutes * 60
+
+                # Log the manual entry
+                self.db.log_activity(
+                    window_title=f"Manual: {description}",
+                    process_name="manual-entry",
+                    project_name=project,
+                    is_active=True,
+                    duration_seconds=total_seconds,
+                    category="Manual",
+                    timestamp=entry_date
+                )
+
+                dialog.destroy()
+                self._refresh()
+                self._show_info("Success", f"Added {hours}h {minutes}m to {project}")
+
+            except ValueError as e:
+                self._show_error("Error", f"Invalid input: {e}")
+
+        ttk.Button(btn_frame, text="Save", command=save_entry).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
 
     def _show_info(self, title: str, message: str):
         """Show info message using appropriate dialog."""

@@ -120,13 +120,22 @@ class Database:
                      project_name: Optional[str], is_active: bool,
                      duration_seconds: int = 5,
                      category: Optional[str] = None,
-                     project_tag: Optional[str] = None) -> int:
-        """Log a single activity record."""
+                     project_tag: Optional[str] = None,
+                     timestamp: Optional[datetime] = None) -> int:
+        """Log a single activity record.
+
+        Args:
+            timestamp: Optional custom timestamp (for manual entries). Defaults to now.
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        # Use local time instead of SQLite's UTC CURRENT_TIMESTAMP
-        local_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Use provided timestamp or current local time
+        if timestamp:
+            # Set to midday of the specified date for manual entries
+            local_time = timestamp.replace(hour=12, minute=0, second=0).strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            local_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         cursor.execute('''
             INSERT INTO activities (timestamp, window_title, process_name, project_name, category, is_active, duration_seconds, project_tag)
